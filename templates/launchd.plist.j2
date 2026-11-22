@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by `dioxide service install`; reinstall to change it. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{ label }}</string>
+    <key>ProgramArguments</key>
+    <array>
+{{ program_arguments }}
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{ home }}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Task processes are their own sessions: they outlive a service restart. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+    <!-- SIGKILL this long after the SIGTERM of a stop; restarts at most this often. -->
+    <key>ExitTimeOut</key>
+    <integer>{{ exit_timeout }}</integer>
+    <key>ThrottleInterval</key>
+    <integer>{{ throttle_interval }}</integer>
+    <key>StandardOutPath</key>
+    <string>{{ stdout_path }}</string>
+    <key>StandardErrorPath</key>
+    <string>{{ stderr_path }}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+{{ environment }}
+    </dict>
+</dict>
+</plist>

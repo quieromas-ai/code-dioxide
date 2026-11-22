@@ -1,0 +1,142 @@
+{
+  "runId": "wf_709b881b-781",
+  "timestamp": "2026-11-19T18:18:00.851Z",
+  "taskId": "wotfv6nvk",
+  "script": "// script elided",
+  "scriptPath": "/repo/s4/scripts/gate.js",
+  "args": {
+    "log": "/repo/s4/side.log",
+    "inputs": "/repo/s4/inputs",
+    "answers": [
+      {
+        "k": 1,
+        "label": "s2",
+        "mode": "after"
+      },
+      {
+        "k": 2,
+        "label": "s3",
+        "mode": "after"
+      }
+    ]
+  },
+  "result": {
+    "status": "done",
+    "out": {
+      "s1": "ok",
+      "s2": "ok",
+      "i1": "blue",
+      "s3": "ok",
+      "i2": "green",
+      "s4": "ok"
+    }
+  },
+  "agentCount": 6,
+  "logs": [
+    "Resume: 4 of the journal's 4 saved results served from cache. Call 5 and every call after it run fresh, not from cache: it has no saved result (it or a call before it changed through a script edit, a reorder or different args, an earlier resume re-ran it without finishing, or the earlier run never started it)."
+  ],
+  "durationMs": 5788,
+  "summary": "Spike B: gate asks with appended answers",
+  "workflowName": "spike-b-gate",
+  "status": "completed",
+  "startTime": 1795112275062,
+  "defaultModel": "claude-haiku-5-5",
+  "workflowProgress": [
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "s1",
+      "agentId": "a0000000000000006",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112275067,
+      "lastProgressAt": 1795112275067,
+      "cached": true,
+      "resultPreview": "ok",
+      "promptPreview": "Run exactly this bash command: echo s1 >> /repo/s4/side.log "
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "s2",
+      "agentId": "a0000000000000007",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112275067,
+      "lastProgressAt": 1795112275067,
+      "cached": true,
+      "resultPreview": "ok",
+      "promptPreview": "Run exactly this bash command: echo s2 >> /repo/s4/side.log "
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "interpret-s2-1",
+      "agentId": "a000000000000000c",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112275067,
+      "lastProgressAt": 1795112275067,
+      "cached": true,
+      "resultPreview": "blue",
+      "promptPreview": "Run exactly this bash command: echo interpret-s2-1 >> /repo/"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "s3",
+      "agentId": "a0000000000000002",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112275067,
+      "lastProgressAt": 1795112275067,
+      "cached": true,
+      "resultPreview": "ok",
+      "promptPreview": "Run exactly this bash command: echo s3 >> /repo/s4/side.log "
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "interpret-s3-2",
+      "agentId": "a000000000000000a",
+      "agentType": "stage",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112275068,
+      "queuedAt": 1795112275067,
+      "attempt": 1,
+      "lastToolName": "SubagentHandback",
+      "lastToolSummary": "green",
+      "promptPreview": "Run exactly this bash command: echo interpret-s3-2 >> /repo/",
+      "promptFramed": true,
+      "lastProgressAt": 1795112278025,
+      "tokens": 6217,
+      "toolCalls": 3,
+      "durationMs": 2956,
+      "resultPreview": "green"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "s4",
+      "agentId": "a0000000000000009",
+      "agentType": "stage",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112278027,
+      "queuedAt": 1795112278026,
+      "attempt": 1,
+      "lastToolName": "SubagentHandback",
+      "lastToolSummary": "ok",
+      "promptPreview": "Run exactly this bash command: echo s4 >> /repo/s4/side.log ",
+      "promptFramed": true,
+      "lastProgressAt": 1795112280850,
+      "tokens": 5948,
+      "toolCalls": 2,
+      "durationMs": 2823,
+      "resultPreview": "ok"
+    }
+  ],
+  "totalTokens": 12165,
+  "totalToolCalls": 5
+}

@@ -1,0 +1,10 @@
+# Roles name agents; each agent's model is set in its file. DIOXIDE_MODEL_FALLBACK can swap a
+# rate-limited model (e.g. {"fable": "opus"}) for the rest of a task (README: Model fallback).
+planner: planner
+implementer: implementer
+reviewers: [reviewer]
+qa: qa
+deployer: deployer
+lifecycle_agent: planner
+aliases: {}
+branch_template: "dioxide/{slug}-{id8}"

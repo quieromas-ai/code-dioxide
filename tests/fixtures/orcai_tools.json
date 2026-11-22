@@ -1,0 +1,457 @@
+{
+  "return_keys": {
+    "check_task_status": [
+      "completed_at",
+      "error",
+      "output",
+      "output.text",
+      "output.tokens_used",
+      "started_at",
+      "status",
+      "task_id"
+    ],
+    "delegate_task": [
+      "error",
+      "position",
+      "status",
+      "task_id"
+    ],
+    "get_active_agents": [
+      "active_count",
+      "agents",
+      "agents.description",
+      "agents.id",
+      "agents.name",
+      "agents.role",
+      "agents.status",
+      "queue_depth"
+    ],
+    "get_agents": [
+      "agents",
+      "agents.description",
+      "agents.id",
+      "agents.name",
+      "agents.role",
+      "agents.status",
+      "total"
+    ],
+    "prompt_agent": [
+      "agent_id",
+      "error",
+      "response",
+      "status",
+      "task_id",
+      "tokens_used"
+    ]
+  },
+  "tools": [
+    {
+      "inputSchema": {
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model_preference": {
+            "default": "claude-sonnet-4-6",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "default": "",
+            "type": "string"
+          },
+          "system_prompt": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "add_agent"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "wakeup_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wakeup_id"
+        ],
+        "type": "object"
+      },
+      "name": "cancel_wakeup"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "name": "check_task_status"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "input_context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_retries": {
+            "default": 0,
+            "type": "integer"
+          },
+          "priority": {
+            "default": 3,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent",
+          "description"
+        ],
+        "type": "object"
+      },
+      "name": "delegate_task"
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get_active_agents"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "full": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tail": {
+            "default": 10,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "type": "object"
+      },
+      "name": "get_agent_logs"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_agents"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "assign_to": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "content": {
+            "default": "",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "default": "1.0.0",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "install_skill"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "full": {
+            "default": false,
+            "type": "boolean"
+          },
+          "include_cancelled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_wakeups"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "message": {
+            "type": "string"
+          },
+          "wait": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent",
+          "message"
+        ],
+        "type": "object"
+      },
+      "name": "prompt_agent"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "delay_seconds": {
+            "type": "integer"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent",
+          "delay_seconds",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "name": "schedule_wakeup"
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "memory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model_preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "type": "object"
+      },
+      "name": "update_agent"
+    }
+  ]
+}

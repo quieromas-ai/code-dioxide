@@ -1,0 +1,6 @@
+{"type":"launched"}
+{"type":"started","key":"v2:257ca51349040b33110e27b5a4c5c7466362caf91bcfae5fa65e40ca0e9f90c2","agentId":"a000000000000000b","label":"s1"}
+{"type":"result","key":"v2:257ca51349040b33110e27b5a4c5c7466362caf91bcfae5fa65e40ca0e9f90c2","agentId":"a000000000000000b","result":"ok","remoteControlDeviceReport":false,"toolsUsed":["Bash","SubagentHandback"],"sessionId":"00000000-0000-4000-8000-000000000003"}
+{"type":"started","key":"v2:a97823a2ea616c89f64b580f44aa5a4591feb3accd0f361fa02f9ad56b988df3","agentId":"a0000000000000001","label":"r-a-1"}
+{"type":"started","key":"v2:a7a864a616d5a30ed983960a2757f1f0d9725698a9608f7d77a2f7c1da8486b8","agentId":"a000000000000000d","label":"r-b-1"}
+{"type":"result","key":"v2:a97823a2ea616c89f64b580f44aa5a4591feb3accd0f361fa02f9ad56b988df3","agentId":"a0000000000000001","result":"ok","remoteControlDeviceReport":false,"toolsUsed":["Bash","SubagentHandback"],"sessionId":"00000000-0000-4000-8000-000000000003"}

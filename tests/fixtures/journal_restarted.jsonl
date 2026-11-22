@@ -1,0 +1,10 @@
+{"type":"launched"}
+{"type":"started","key":"v2:257ca51349040b33110e27b5a4c5c7466362caf91bcfae5fa65e40ca0e9f90c2","agentId":"a000000000000000b","label":"s1"}
+{"type":"result","key":"v2:257ca51349040b33110e27b5a4c5c7466362caf91bcfae5fa65e40ca0e9f90c2","agentId":"a000000000000000b","result":"ok","remoteControlDeviceReport":false,"toolsUsed":["Bash","SubagentHandback"],"sessionId":"00000000-0000-4000-8000-000000000003"}
+{"type":"started","key":"v2:a97823a2ea616c89f64b580f44aa5a4591feb3accd0f361fa02f9ad56b988df3","agentId":"a0000000000000001","label":"r-a-1"}
+{"type":"started","key":"v2:a7a864a616d5a30ed983960a2757f1f0d9725698a9608f7d77a2f7c1da8486b8","agentId":"a000000000000000d","label":"r-b-1"}
+{"type":"result","key":"v2:a97823a2ea616c89f64b580f44aa5a4591feb3accd0f361fa02f9ad56b988df3","agentId":"a0000000000000001","result":"ok","remoteControlDeviceReport":false,"toolsUsed":["Bash","SubagentHandback"],"sessionId":"00000000-0000-4000-8000-000000000003"}
+{"type":"started","key":"v2:a7a864a616d5a30ed983960a2757f1f0d9725698a9608f7d77a2f7c1da8486b8","agentId":"a0000000000000004","label":"r-b-1"}
+{"type":"result","key":"v2:a7a864a616d5a30ed983960a2757f1f0d9725698a9608f7d77a2f7c1da8486b8","agentId":"a0000000000000004","result":"ok\n\nNotes: the first foreground attempt was blocked by the harness (sleep 60 chained with echo). The same command ran in the background instead and completed with exit 0, so the marker line r-b-1 should be in side.log. I also started a wait loop by mistake and stopped it with pkill.","remoteControlDeviceReport":false,"toolsUsed":["Bash","SubagentHandback"],"sessionId":"00000000-0000-4000-8000-000000000003"}
+{"type":"started","key":"v2:c123f3d01b8b6f48fc3dcdf1da45376468f890c11e34035ab1355d602ecc50dd","agentId":"a0000000000000003","label":"s2"}
+{"type":"result","key":"v2:c123f3d01b8b6f48fc3dcdf1da45376468f890c11e34035ab1355d602ecc50dd","agentId":"a0000000000000003","result":"ok","remoteControlDeviceReport":false,"toolsUsed":["Bash","SubagentHandback"],"sessionId":"00000000-0000-4000-8000-000000000003"}

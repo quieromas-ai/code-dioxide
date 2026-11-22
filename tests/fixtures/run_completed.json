@@ -1,0 +1,94 @@
+{
+  "runId": "wf_0b1533f1-219",
+  "timestamp": "2026-11-19T18:19:44.330Z",
+  "taskId": "wynyffy2h",
+  "script": "// script elided",
+  "scriptPath": "/repo/step6/scripts/wf.js",
+  "args": {
+    "n": 7,
+    "tag": "spike-c"
+  },
+  "result": {
+    "first": "ok",
+    "second": {
+      "ok": true,
+      "n": 7
+    },
+    "tag": "spike-c"
+  },
+  "agentCount": 2,
+  "logs": [],
+  "durationMs": 2532,
+  "summary": "Two trivial stages returning a small JSON object",
+  "workflowName": "spike-c-two-stage",
+  "status": "completed",
+  "startTime": 1795112381795,
+  "phases": [
+    {
+      "title": "One"
+    },
+    {
+      "title": "Two"
+    }
+  ],
+  "defaultModel": "claude-haiku-5-5",
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "One"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Two"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "stage-one",
+      "phaseIndex": 1,
+      "phaseTitle": "One",
+      "agentId": "a0000000000000008",
+      "agentType": "stage-worker",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112381803,
+      "queuedAt": 1795112381801,
+      "attempt": 1,
+      "lastToolName": "SubagentHandback",
+      "lastToolSummary": "ok",
+      "promptPreview": "Reply with exactly the word ok and nothing else.",
+      "promptFramed": true,
+      "lastProgressAt": 1795112382993,
+      "tokens": 5751,
+      "toolCalls": 1,
+      "durationMs": 1190,
+      "resultPreview": "ok"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "stage-two",
+      "phaseIndex": 2,
+      "phaseTitle": "Two",
+      "agentId": "a0000000000000005",
+      "agentType": "stage-worker",
+      "model": "claude-haiku-5-5",
+      "state": "done",
+      "startedAt": 1795112383002,
+      "queuedAt": 1795112382993,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "Return ok=true and n=7",
+      "promptFramed": true,
+      "lastProgressAt": 1795112384329,
+      "tokens": 5427,
+      "toolCalls": 1,
+      "durationMs": 1327,
+      "resultPreview": "{\"ok\":true,\"n\":7}"
+    }
+  ],
+  "totalTokens": 11178,
+  "totalToolCalls": 2
+}

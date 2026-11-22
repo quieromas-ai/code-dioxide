@@ -1,0 +1,5 @@
+{"type":"launched"}
+{"type":"started","key":"v2:c6e2359de653f3b0a938df17b608a75dde2bba21108e5564dc821aecd4d5a2fb","agentId":"a0000000000000008","label":"stage-one","phase":"One"}
+{"type":"result","key":"v2:c6e2359de653f3b0a938df17b608a75dde2bba21108e5564dc821aecd4d5a2fb","agentId":"a0000000000000008","result":"ok","remoteControlDeviceReport":false,"toolsUsed":["SubagentHandback"],"sessionId":"00000000-0000-4000-8000-000000000001"}
+{"type":"started","key":"v2:d0e7735da454bd5da085cc6ad622f0e6868489834a8d3beb189208ad44641dff","agentId":"a0000000000000005","label":"stage-two","phase":"Two"}
+{"type":"result","key":"v2:d0e7735da454bd5da085cc6ad622f0e6868489834a8d3beb189208ad44641dff","agentId":"a0000000000000005","result":{"ok":true,"n":7},"remoteControlDeviceReport":false,"toolsUsed":["StructuredOutput"],"sessionId":"00000000-0000-4000-8000-000000000001"}
