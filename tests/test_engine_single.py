@@ -32,6 +32,7 @@ from tests.helpers import (
     wait_for,
     wait_status,
 )
+from tests.stub_claude import RUN_MODEL_TOKENS
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "orcai_tools.json"
 pytestmark = pytest.mark.usefixtures("spawned")  # every test: no stub process left running
@@ -1262,3 +1263,41 @@ async def test_reload_error_never_carries_the_source_line_and_is_global(env: Env
         assert not task_event["type"].startswith("agents_reload")
     events_file = env.engine.runstore.task_dir(sub["task_id"]) / "events.jsonl"
     assert "agents_reload" not in events_file.read_text()
+
+
+async def test_single_tokens_cover_every_model(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    # modelUsage counts subagents and every model; top-level usage is the parent loop only.
+    monkeypatch.setenv("STUB_CLAUDE_SESSION_USAGE", "1")
+    sub = await submit(env)
+    await env.engine.start()
+    st = await wait_status(env.engine, sub["task_id"], "completed", "failed")
+    assert st["status"] == "completed", st
+    assert st["tokens_used"] == st["output"]["tokens_used"] == RUN_MODEL_TOKENS
+    assert st["cost_usd"] == pytest.approx(0.0042)
+
+
+async def test_status_interim_result_of_resumed_attempt_counted_once(env: Env) -> None:
+    task_id = (await submit(env))["task_id"]
+    stream_path = env.engine.runstore.attempt_paths(task_id, 2)[0]
+    stream_path.parent.mkdir(parents=True, exist_ok=True)
+    # The resumed attempt's running total already includes attempt 1 (same session).
+    record = {
+        "type": "result", "total_cost_usd": 0.5, "result_index": 0,
+        "usage": {"input_tokens": 20, "output_tokens": 0},
+        "modelUsage": {"m": {"inputTokens": 800, "costUSD": 0.5}},
+    }  # fmt: skip
+    stream_path.write_text(json.dumps(record) + "\n")
+    async with write_tx() as db:
+        await db.execute("UPDATE tasks SET status = 'running' WHERE id = ?", (task_id,))
+        await db.execute(
+            "INSERT INTO attempts (task_id, n, session_id, started_at, ended_at, cost_usd, tokens) "
+            "VALUES (?, 1, 's1', 1.0, 2.0, 0.19, 300)",
+            (task_id,),
+        )
+        await db.execute(
+            "INSERT INTO attempts (task_id, n, session_id, started_at) VALUES (?, 2, 's1', 3.0)",
+            (task_id,),
+        )
+    st = await env.engine.status(task_id)
+    assert st["cost_usd"] == pytest.approx(0.5) and st["tokens_used"] == 800
+    assert st["cost_partial"] is True

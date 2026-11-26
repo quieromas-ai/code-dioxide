@@ -100,6 +100,7 @@ Poll with `check_task_status(task_id)`.
 | `dioxide register` | Print the `claude mcp add` command. |
 | `dioxide logs TASK_ID [--source S] [--follow] [--url U] [--token T]` | Print a task's logs, locally or remotely (see Remote debugging). |
 | `dioxide sync-agents --source DIR [--prefix TEXT]` | Show drift between agent definitions in DIR and the home's agents. |
+| `dioxide repair-usage [--apply]` | Recompute recorded cost and tokens from the stored streams; a dry run without `--apply`. |
 
 `service install` captures `PATH` from your login shell at install time, with `extra_path` and
 `--extra-path` prepended (the order a task's `PATH` gets them in), and an absolute path to
@@ -126,6 +127,14 @@ and the body separately, plus the files found on one side only. It exits 1 on dr
 otherwise. Use `--prefix` when the home holds prefixed copies: with `--prefix dx-`, the home
 file `dx-reviewer.md` pairs with the source `reviewer.md`, and a `name:` value that differs
 only by the prefix is not reported.
+
+`repair-usage` fixes usage recorded before per-attempt shares (see Known limits): each
+attempt's cost and tokens are computed again from its stream's last result line, and a task
+output's `tokens_used` and `cost_usd` become the task's totals. A task with an open attempt or
+a pruned stream is listed as skipped and left as it is. Without `--apply` it only prints the
+changes. `--apply` refuses while dioxide runs for the home (stop the service first), copies the
+database to `<home>/data/dioxide.db.repair-<unix time>.bak`, then writes in one transaction. A
+second run changes nothing.
 
 ## MCP tools
 
@@ -522,8 +531,18 @@ after a grace period, and signals a pid only if its start time matches the recor
 
 ## Known limits
 
-- The cost of a killed attempt is not counted: cost comes from the session's result line, which
-  a killed attempt does not write.
+- Tokens (`tokens_used`, each attempt's `tokens`) count every model and subagent, cache reads
+  and writes included (the result line's `modelUsage`). A result line without it falls back to
+  `usage`, which covers the parent session only.
+- A resumed session reports its whole total, earlier attempts included (Claude Code 2.1.277 and
+  later). Each attempt keeps only its own share: that total minus what the session's earlier
+  attempts already count. Before 2.1.277 a resumed session started its totals at zero. A total
+  below the already-counted amount is taken as such a restart, but a pre-2.1.277 resume that
+  spends more than the earlier attempts is undercounted by their amount.
+- A killed attempt writes no result line, so its own row has no cost. When the next attempt
+  resumes the same session, that session's total includes the killed attempt's spend, which is
+  then counted in the resumed attempt's share. After a final kill or a fresh start it is not
+  counted.
 - The background service is macOS only; Linux is untested.
 - A fresh-session restart may ask again: a plan that was not yet approved is planned (and, with
   `plan_gate`, asked) again.

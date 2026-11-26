@@ -28,8 +28,9 @@ from src.launcher import SCRIPT_NAME
 from src.lifecycle_args import build_lifecycle_args
 from src.logpager import iso
 from src.serverlog import LOGGER_NAME
-from src.stream import Result, WorkflowAck
+from src.stream import WorkflowAck
 from src.tasks import Task
+from src.usage import Usage
 
 if TYPE_CHECKING:
     from src.engine import TaskEngine
@@ -489,9 +490,10 @@ async def has_valid_return(engine: "TaskEngine", attempt: "Attempt", state: dict
     return valid_return(await read_return(engine, attempt, state))
 
 
-def _output(text: str, value: dict[str, Any], last: Result | None) -> str:
-    tokens = last.tokens if last else None
-    cost = last.cost_usd if last else None
+def _output(text: str, value: dict[str, Any], usage: Usage | None) -> str:
+    """The task output; ``usage`` is the task's (every attempt), None when unknown."""
+    tokens = usage.tokens if usage else None
+    cost = usage.cost_usd if usage else None
     out = {"text": text, "tokens_used": tokens, "cost_usd": cost, "return": value}
     return json.dumps(out, ensure_ascii=False)
 
@@ -521,12 +523,13 @@ def apply_return(
     engine: "TaskEngine",
     update: dict[str, Any],
     workflow_return: Any,
-    last: Result | None,
+    usage: Usage | None,
     outcome: Outcome | None = None,
 ) -> bool:
     """Fill the task update from the workflow return: output (completed, cancelled,
     needs_human), the question (needs_human), the stage failure, the script failure or the
-    invalid return (failed). True when the update's error was set here."""
+    invalid return (failed). ``usage`` is the task's usage, every attempt (None: unknown). True
+    when the update's error was set here."""
     if update["status"] == "failed":
         event = failure_event(engine, workflow_return, outcome)
         if event is not None:
@@ -548,7 +551,7 @@ def apply_return(
             update.update(status="failed", completed_at=time.time())
             shown = engine.redactor.redact_text(f"stage={stage!r}, kind={kind!r}")
             update["error"] = f"invalid needs_human return ({shown[:ERROR_DETAIL_CHARS]})"
-            update["output_json"] = _output("", workflow_return, last)
+            update["output_json"] = _output("", workflow_return, usage)
             return True
         text = workflow_return.get("question")
         text = text if isinstance(text, str) else ""
@@ -559,10 +562,10 @@ def apply_return(
             "question": text,
         }
         update["question_json"] = json.dumps(question, ensure_ascii=False)
-        update["output_json"] = _output(text, workflow_return, last)
+        update["output_json"] = _output(text, workflow_return, usage)
     elif status in ("completed", "cancelled"):
         text = json.dumps(workflow_return, ensure_ascii=False, sort_keys=True)
-        update["output_json"] = _output(text, workflow_return, last)
+        update["output_json"] = _output(text, workflow_return, usage)
     elif status == "failed" and workflow_return.get("status") == "stage_failed":
         stage = workflow_return.get("stage")
         detail = workflow_return.get("error")

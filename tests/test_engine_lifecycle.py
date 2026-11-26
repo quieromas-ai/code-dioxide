@@ -26,6 +26,7 @@ from tests.helpers import (
     wait_for,
     wait_status,
 )
+from tests.stub_claude import RUN_MODEL_TOKENS
 
 pytestmark = pytest.mark.usefixtures("spawned")  # every test: no stub process left running
 ENDED = ("completed", "failed", "cancelled", "needs_human")
@@ -992,3 +993,32 @@ async def test_stage_rate_limit_falls_back_to_the_mapped_model(
     assert steps["plan"]["cached"] is True and steps["implement"]["cached"] is False
     counts = await rows("SELECT label, started_count FROM steps WHERE task_id = ?", task_id)
     assert {r["label"]: r["started_count"] for r in counts} == {"plan": 1, "implement": 2}
+
+
+async def test_resumed_session_usage_counted_once(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A resumed run reports its session's whole total (Claude Code 2.1.277+): each attempt
+    # keeps only its own share, so the task total is the session total, not the sum of totals.
+    monkeypatch.setenv("STUB_CLAUDE_SCENARIO", "needs_human_gate")
+    monkeypatch.setenv("STUB_CLAUDE_SESSION_USAGE", "1")
+    task_id = await lifecycle(env)
+    await env.engine.start()
+    st = await wait_status(env.engine, task_id, *ENDED)
+    assert st["status"] == "needs_human", st
+    assert st["cost_usd"] == pytest.approx(0.0125) and st["tokens_used"] == RUN_MODEL_TOKENS
+    assert st["output"]["cost_usd"] == pytest.approx(0.0125)
+    assert st["output"]["tokens_used"] == RUN_MODEL_TOKENS
+    provider = ToolProvider()
+    provider.attach(env.engine)
+    await provider.answer_task(task_id, "Approved")
+    st = await wait_status(env.engine, task_id, "completed", "failed")
+    assert st["status"] == "completed", st
+    assert st["cost_usd"] == pytest.approx(0.025) and st["tokens_used"] == 2 * RUN_MODEL_TOKENS
+    assert st["output"]["cost_usd"] == pytest.approx(0.025)
+    assert st["output"]["tokens_used"] == 2 * RUN_MODEL_TOKENS
+    attempts = await rows("SELECT * FROM attempts WHERE task_id = ? ORDER BY n", task_id)
+    assert [a["tokens"] for a in attempts] == [RUN_MODEL_TOKENS, RUN_MODEL_TOKENS]
+    assert [a["cost_usd"] for a in attempts] == [pytest.approx(0.0125), pytest.approx(0.0125)]
+    (item,) = (await env.engine.list(None, None, 10, None))["tasks"]
+    assert item["cost_usd"] == pytest.approx(0.025)

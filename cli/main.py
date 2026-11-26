@@ -19,9 +19,11 @@ import httpx
 from dotenv import dotenv_values
 
 from cli import service
+from cli.usage_repair import Plan, apply_plan, backup, plan_repair
 from src import childenv
 from src.childenv import ChildEnvError
-from src.config import DEFAULT_HOME, Settings, resolve_home
+from src.config import DEFAULT_HOME, AlreadyRunning, Settings, acquire_home_lock, resolve_home
+from src.database import SCHEMA_VERSION
 from src.main import serve
 
 PRIVATE_DIR_MODE = 0o700
@@ -594,6 +596,70 @@ def page_logs(client: httpx.Client, task_id: str, source: str | None) -> None:
         cursor = page.get("next_cursor")
         if not page["entries"] or page.get("done"):
             return
+
+
+def _usage_text(cost: float | None, tokens: int | None) -> str:
+    return f"${cost:.4f}/{tokens} tok" if cost is not None else f"$?/{tokens} tok"
+
+
+def _print_plan(plan: Plan) -> None:
+    for fix in plan.fixes:
+        for a in fix.attempts:
+            old, new = (
+                _usage_text(a.old.cost_usd, a.old.tokens),
+                _usage_text(a.new.cost_usd, a.new.tokens),
+            )
+            click.echo(f"{fix.task_id} attempt {a.n}: {old} -> {new}")
+        if fix.output_json is not None:
+            out = json.loads(fix.output_json)
+            click.echo(f"{fix.task_id} output: {_usage_text(out['cost_usd'], out['tokens_used'])}")
+    for skip in plan.skipped:
+        click.echo(f"{skip.task_id} skipped: {skip.reason}")
+    rows = sum(len(f.attempts) for f in plan.fixes)
+    outputs = sum(f.output_json is not None for f in plan.fixes)
+    click.echo(
+        f"{rows} attempt rows, {outputs} outputs to change; {len(plan.skipped)} tasks skipped"
+    )
+
+
+@cli.command("repair-usage")
+@click.option(
+    "--apply", "apply_", is_flag=True, help="Write the changes (default: only show them)."
+)
+def repair_usage(apply_: bool) -> None:
+    """Recompute recorded cost and tokens from the stored streams (dry run by default)."""
+    settings = load()
+    db_path = settings.db_path
+    if not db_path.is_file():
+        _fail(f"no database at {db_path}")
+    lock = None
+    if apply_:
+        try:
+            lock = acquire_home_lock(settings.lock_path)
+        except AlreadyRunning:
+            _fail(f"dioxide is running for home {settings.home}: stop it first")
+    try:
+        uri = db_path.as_uri() + ("" if apply_ else "?mode=ro")
+        with closing(sqlite3.connect(uri, uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version != SCHEMA_VERSION:
+                _fail(
+                    f"database schema v{version}, this code v{SCHEMA_VERSION}: start dioxide once"
+                )
+            plan = plan_repair(conn)
+            _print_plan(plan)
+            if not apply_:
+                if plan.fixes:
+                    click.echo("dry run: run with --apply to write (stop dioxide first)")
+                return
+            if plan.fixes:
+                click.echo(f"backup: {backup(conn, db_path)}")
+                apply_plan(conn, plan)
+                click.echo("applied")
+    finally:
+        if lock is not None:
+            lock.release()
 
 
 @cli.command()

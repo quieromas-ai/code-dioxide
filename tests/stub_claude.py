@@ -23,6 +23,10 @@ Every launch appends its argv and selected environment to ``$STUB_CLAUDE_LOG`` (
 the attempt counter lives next to it (``<log>.count``). Lifecycle scenarios echo the Workflow
 input found in the prompt; a resumed run serves steps already in the journal from cache.
 
+``$STUB_CLAUDE_SESSION_USAGE`` (optional) adds ``modelUsage`` (the run's tokens plus subagent
+tokens, ``RUN_MODEL_TOKENS`` per run) to the result lines and makes them report session totals:
+a resumed session restores the totals its earlier runs saved, as Claude Code 2.1.277+ does.
+
 ``$STUB_CLAUDE_NO_PROGRESS`` (optional) leaves ``workflowProgress`` out of the run file.
 ``call_mutated``, ``drop_resume_id`` and ``second_call`` start their first stage only after
 ``$STUB_CLAUDE_STAGE_DELAY_S`` (default 15 s); ``answer_mismatch`` and ``workflow_abort`` return
@@ -90,6 +94,9 @@ LIMIT_TEXT = "You've hit your limit · resets 3pm (Europe/Paris)"
 AUTH_TEXT = "Failed to authenticate: OAuth session expired and could not be refreshed"
 # Scenarios whose Workflow call the engine must kill: the first stage starts only after
 # $STUB_CLAUDE_STAGE_DELAY_S (default 15 s), so a kill "before the first stage" is observable.
+# Tokens one run spends over every model, subagents included ($STUB_CLAUDE_SESSION_USAGE).
+RUN_MODEL_TOKENS = 121_104
+SESSION_USAGE_FILE = "stub-session-usage.json"
 STAGE_DELAYED = frozenset({"call_mutated", "drop_resume_id", "second_call"})
 
 
@@ -131,6 +138,7 @@ class Ctx:
         self.sdir = Path(home) / "projects" / slug(self.cwd) / self.session
         self.log_path = os.environ.get("STUB_CLAUDE_LOG")
         self.attempt = self._next_attempt()
+        self._restored: dict[str, Any] | None = None  # $STUB_CLAUDE_SESSION_USAGE base
         # Default: a lifecycle prompt plays `success`, any other prompt `single_success`.
         default = "success" if CALL_MARKER in self.args.prompt else "single_success"
         names = (os.environ.get("STUB_CLAUDE_SCENARIO") or default).split(",")
@@ -254,7 +262,28 @@ class Ctx:
             "result_index": index,
         }
         line.update(extra)
+        if os.environ.get("STUB_CLAUDE_SESSION_USAGE"):
+            self._session_totals(line)
         self.emit(line)
+
+    def _session_totals(self, line: dict[str, Any]) -> None:
+        """Report session totals: this run's spend plus what a resumed session restored."""
+        saved = self.sdir / SESSION_USAGE_FILE
+        if self._restored is None:  # read once per run: every result line reports the same base
+            self._restored = {"cost": 0.0, "tokens": 0}
+            if self.args.resume and saved.exists():
+                self._restored = json.loads(saved.read_text())
+        cost = self._restored["cost"] + float(line["total_cost_usd"])
+        tokens = self._restored["tokens"] + RUN_MODEL_TOKENS
+        line["total_cost_usd"] = cost
+        line["modelUsage"] = {
+            "claude-opus-5-5": {
+                "inputTokens": 4, "outputTokens": 100, "cacheReadInputTokens": tokens - 1104,
+                "cacheCreationInputTokens": 1000, "costUSD": cost,
+            }
+        }  # fmt: skip
+        self.sdir.mkdir(parents=True, exist_ok=True)
+        saved.write_text(json.dumps({"cost": cost, "tokens": tokens}))  # saved at exit
 
 
 class ScriptError:

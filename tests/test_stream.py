@@ -567,3 +567,46 @@ def test_last_interim_result_scan_is_bounded(
     path.write_text(line * 2000 + result + line * 5)
     found = last_interim_result(path)
     assert found is not None and found.cost_usd == 1.0
+
+
+def _result_with(tmp_path: Path, **fields: Any) -> Result:
+    path = tmp_path / "attempt-1.stream.jsonl"
+    record = {"type": "result", "total_cost_usd": 0.5, "usage": {"input_tokens": 7}, **fields}
+    path.write_text(json.dumps(record) + "\n")
+    found = last_interim_result(path)
+    assert found is not None
+    return found
+
+
+def test_result_session_tokens_sum_every_model(tmp_path: Path) -> None:
+    # modelUsage covers subagents and every model; usage is the top-level loop only.
+    model_usage = {
+        "claude-opus-5-5": {
+            "inputTokens": 26, "outputTokens": 8185,
+            "cacheReadInputTokens": 333465, "cacheCreationInputTokens": 62587,
+            "webSearchRequests": 3, "costUSD": 0.6, "contextWindow": 1000000,
+        },
+        "claude-haiku-5-5": {
+            "inputTokens": 1, "outputTokens": 2,
+            "cacheReadInputTokens": 3, "cacheCreationInputTokens": 4,
+        },
+    }  # fmt: skip
+    found = _result_with(tmp_path, modelUsage=model_usage)
+    assert found.session_tokens == 404263 + 10
+    assert found.tokens == 7  # unchanged: still the top-level usage
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"modelUsage": {}}, {"modelUsage": None}, {"modelUsage": "x"}, {"modelUsage": [1]},
+     {"modelUsage": {"m": "not a dict"}}],
+)  # fmt: skip
+def test_result_session_tokens_none_without_model_usage(
+    tmp_path: Path, fields: dict[str, Any]
+) -> None:
+    assert _result_with(tmp_path, **fields).session_tokens is None
+
+
+def test_result_session_tokens_ignores_non_integer_fields(tmp_path: Path) -> None:
+    model_usage = {"m": {"inputTokens": "5", "outputTokens": True, "cacheReadInputTokens": 9}}
+    assert _result_with(tmp_path, modelUsage=model_usage).session_tokens == 9

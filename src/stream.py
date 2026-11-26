@@ -82,6 +82,9 @@ class Result:
     errors: list[str]
     permission_denials: list[Any]
     result_index: int | None
+    # Tokens of the whole session so far (every model, subagents included) from ``modelUsage``;
+    # None when the record has none. ``tokens`` is the top-level loop of this run only.
+    session_tokens: int | None = None
 
 
 Ev = (
@@ -101,6 +104,12 @@ _TOKEN_FIELDS = (
     "output_tokens",
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
+)
+_MODEL_TOKEN_FIELDS = (
+    "inputTokens",
+    "outputTokens",
+    "cacheCreationInputTokens",
+    "cacheReadInputTokens",
 )
 
 
@@ -152,6 +161,17 @@ def _workflow_input(raw: Any) -> dict[str, Any]:
     return data
 
 
+def _session_tokens(model_usage: Any) -> int | None:
+    """The token total over every model of a result's ``modelUsage``; None without a usable
+    one (missing, empty or no per-model object). A non-integer field counts as 0."""
+    if not isinstance(model_usage, dict):
+        return None
+    models = [m for m in model_usage.values() if isinstance(m, dict)]
+    if not models:
+        return None
+    return sum(_int(m.get(name)) or 0 for m in models for name in _MODEL_TOKEN_FIELDS)
+
+
 def _result(obj: dict[str, Any]) -> Result:
     usage = obj.get("usage")
     tokens = 0
@@ -171,6 +191,7 @@ def _result(obj: dict[str, Any]) -> Result:
         errors=[e for e in errors if isinstance(e, str)] if isinstance(errors, list) else [],
         permission_denials=list(denials) if isinstance(denials, list) else [],
         result_index=_int(obj.get("result_index")),
+        session_tokens=_session_tokens(obj.get("modelUsage")),
     )
 
 

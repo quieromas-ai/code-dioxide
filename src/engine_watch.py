@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src import engine_lifecycle, engine_recovery, engine_sweep, procs, recovery
+from src import engine_lifecycle, engine_recovery, engine_sweep, procs, recovery, usage
 from src.classify import Outcome, auth_message, classify
 from src.config import CHILD_ENV_NAME
 from src.database import after_commit, get_db, write_tx
@@ -367,6 +367,10 @@ async def finish_attempt(
     async with write_tx() as db:
         current = Task.from_row(await engine._fetch(db, task_id))
         status = current.status  # cancelled meanwhile: cancel already wrote the terminal status
+        # The attempt's own share: a resumed session's report includes its earlier attempts.
+        prior = await usage.session_usage_before(db, task_id, attempt.n)
+        share = usage.attempt_usage(last, prior)
+        totals = await usage.task_usage(db, task_id, attempt.n, share)
         update: dict[str, Any] | None = None
         action: recovery.Action | None = None
         explained = False
@@ -381,7 +385,7 @@ async def finish_attempt(
             if attempt.task.is_lifecycle and return_decides:
                 # May turn an unanswerable needs_human into failed: before `clean` is decided.
                 explained = engine_lifecycle.apply_return(
-                    engine, update, workflow_return, last, outcome
+                    engine, update, workflow_return, totals, outcome
                 )
                 failure = engine_lifecycle.failure_event(engine, workflow_return, outcome)
                 if failure is not None and update["status"] == "failed":
@@ -399,7 +403,7 @@ async def finish_attempt(
             "WHERE task_id = ? AND n = ? AND ended_at IS NULL",
             (
                 now, exit_code, outcome.value, CLEAN_EXIT if clean else current.kill_reason,
-                last.cost_usd if last else None, last.tokens if last else None,
+                share.cost_usd, share.tokens,
                 (attempt.gone_at or now) - attempt.started_at, task_id, attempt.n,
             ),
         )  # fmt: skip
@@ -409,7 +413,9 @@ async def finish_attempt(
                 and update["status"] == "completed"
                 and last is not None
             ):
-                output = {"text": last.text, "tokens_used": last.tokens, "cost_usd": last.cost_usd}
+                output = {
+                    "text": last.text, "tokens_used": totals.tokens, "cost_usd": totals.cost_usd,
+                }  # fmt: skip
                 update["output_json"] = json.dumps(output)
             if update["status"] == "failed" and not explained:
                 error = _failure_text(engine, update["error"], exit_code, stderr_tail, last)

@@ -7,7 +7,7 @@ import json
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-from src import engine_lifecycle, recovery, stream
+from src import engine_lifecycle, recovery, stream, usage
 from src.database import get_db
 from src.logpager import iso
 from src.tasks import Task
@@ -99,9 +99,11 @@ async def _usage(engine: "TaskEngine", task: Task) -> tuple[float, int | None, b
         return cost, tokens, False
     path = engine.runstore.attempt_paths(task_id, open_attempt)[0]
     interim = await asyncio.to_thread(stream.last_interim_result, path)
-    if interim is not None:
-        cost += interim.cost_usd or 0.0
-        tokens = (tokens or 0) + interim.tokens
+    if interim is not None:  # its share: a resumed session's total includes earlier attempts
+        prior = await usage.session_usage_before(db, task_id, open_attempt)
+        share = usage.attempt_usage(interim, prior)
+        cost += share.cost_usd or 0.0
+        tokens = (tokens or 0) + (share.tokens or 0)
     return cost, tokens, True
 
 

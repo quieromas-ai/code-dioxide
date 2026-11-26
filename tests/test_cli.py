@@ -875,7 +875,10 @@ def test_service_install_reports_path_gaps(
     result = CliRunner().invoke(cli, [*args, "--extra-path", "/given/too"])
     assert result.exit_code == 0, result.output
     (gap,) = [line for line in result.stderr.splitlines() if "/only/here" in line]
-    assert "--extra-path" in gap and "/given/too" not in gap and "/usr/bin" not in gap
+    # Whole entries, not substrings: the shell's own PATH may hold e.g. /System/.../usr/bin.
+    entries = gap.split("service's: ", 1)[1].split(" (add ", 1)[0].split(", ")
+    assert "--extra-path" in gap and "/only/here" in entries
+    assert "/given/too" not in entries and "/usr/bin" not in entries
 
 
 def test_service_install_waits_for_health(

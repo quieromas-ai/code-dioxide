@@ -17,3 +17,5 @@ htmlcov/
 
 # Secrets / local config
 .env
+
+.worktrees/
