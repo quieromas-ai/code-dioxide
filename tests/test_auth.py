@@ -17,6 +17,7 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 
 import src.main
+from src.auth import Access, BearerAuthMiddleware, access_of
 from src.config import AlreadyRunning, Settings, acquire_home_lock
 from src.database import write_tx
 from src.logpager import MAX_CURSOR_CHARS
@@ -415,3 +416,138 @@ async def test_stop_with_open_sse_stream_is_bounded(tmp_path: Path) -> None:
             assert done, f"stop still blocked after {elapsed:.1f}s"
     assert elapsed < bound
     assert "dioxide stopped" in settings.server_log_path.read_text()
+
+
+REPORTS = "reports-token-value"
+CONTENT = "content-token-value"
+REPORTS_ALLOWED = [
+    "/health", "/api/v1", "/api/v1/openapi.json", "/api/v1/tasks", "/api/v1/tasks/x",
+    "/api/v1/tasks/x/attempts", "/api/v1/tasks/x/stages", "/api/v1/tasks/x/graph",
+    "/api/v1/agents", "/api/v1/agents/a", "/api/v1/projects",
+    "/api/v1/metrics/usage", "/api/v1/metrics/time", "/api/v1/metrics/reliability",
+    "/api/v1/metrics/stages", "/api/v1/metrics/savings",
+    "/api/v1/metrics/overhead", "/api/v1/events", "/api/v1/activity",
+    "/api/v1/activity/stream?last_event_id=x",  # 400 before streaming: the scope check passed
+]  # fmt: skip
+CONTENT_ONLY = [
+    "/api/v1/agents/a/prompt", "/api/v1/tasks/x/prompts", "/api/v1/tasks/x/events",
+    "/api/v1/tasks/x/stages/plan@a1/result", "/api/v1/tasks/x/stages/plan@a1/transcript",
+    "/api/v1/tasks/x/summary",
+]  # fmt: skip
+REPORTS_DENIED = [
+    ("GET", "/api/v1/tasks/x/logs"),
+    ("GET", "/api/v1/tasks/x/stream"),
+    ("GET", "/api/v1/tasks/x/debug"),
+    ("GET", "/api/v1/tasks/x/bundle.tar.gz"),
+    ("GET", "/api/v1/server/logs"),
+    ("POST", "/api/v1/tasks/x/cancel"),
+    ("POST", "/api/v1/tasks/x/answer"),
+    ("POST", "/mcp"),
+    ("GET", "/mcp"),
+    ("GET", "/api/v1/tasks/x/"),
+    ("GET", "/api/v1/tasks/x%2Flogs"),
+    ("POST", "/api/v1/tasks"),
+    ("GET", "/api/v1/metrics/usage/x"),
+    ("GET", "/openapi.json"),
+]
+
+
+async def test_content_routes_need_the_content_scope(tmp_path: Path) -> None:
+    app = create_app(scoped_settings(tmp_path))
+    async with running(app), client_for(app, REMOTE) as client:
+        for path in CONTENT_ONLY:
+            denied = await client.get(path, headers=bearer(REPORTS))
+            assert denied.status_code == 403, path
+            allowed = await client.get(path, headers=bearer(CONTENT))
+            assert allowed.status_code not in (401, 403), path  # fmt: skip
+
+
+def scoped_settings(tmp_path: Path, **overrides: Any) -> Settings:
+    return make_settings(tmp_path, reports_token=REPORTS, content_token=CONTENT, **overrides)
+
+
+@pytest.mark.parametrize("token", [REPORTS, CONTENT])
+async def test_reports_scope_allowed_paths(tmp_path: Path, token: str) -> None:
+    app = create_app(scoped_settings(tmp_path))
+    async with running(app), client_for(app, REMOTE) as client:
+        for path in REPORTS_ALLOWED:
+            response = await client.get(path, headers=bearer(token))
+            assert response.status_code not in (401, 403), path
+        assert (await client.get("/api/v1/tasks", headers=bearer(token))).status_code == 200
+
+
+@pytest.mark.parametrize("token", [REPORTS, CONTENT])
+async def test_reports_scope_denied_paths(tmp_path: Path, token: str) -> None:
+    app = create_app(scoped_settings(tmp_path))
+    async with client_for(app, REMOTE) as client:
+        for method, path in REPORTS_DENIED:
+            response = await client.request(method, path, headers=bearer(token))
+            assert response.status_code == 403, (method, path)
+            assert response.json() == {"error": "forbidden"}
+
+
+async def test_admin_token_not_limited_by_allowlist(tmp_path: Path) -> None:
+    app = create_app(scoped_settings(tmp_path))
+    async with running(app), client_for(app, REMOTE) as client:
+        response = await client.get("/api/v1/server/logs", headers=bearer())
+    assert response.status_code == 200
+
+
+async def test_unknown_token_still_401_with_scopes(tmp_path: Path) -> None:
+    app = create_app(scoped_settings(tmp_path))
+    async with client_for(app, REMOTE) as client:
+        response = await client.get("/api/v1/tasks", headers=bearer("nope"))
+    assert response.status_code == 401
+
+
+async def test_trusted_loopback_is_admin(tmp_path: Path) -> None:
+    app = create_app(scoped_settings(tmp_path, trust_loopback=True))
+    async with running(app), client_for(app, LOOPBACK) as client:
+        response = await client.get("/api/v1/server/logs")
+    assert response.status_code == 200
+
+
+async def test_empty_report_token_never_matches(tmp_path: Path) -> None:
+    app = create_app(make_settings(tmp_path))
+    async with client_for(app, REMOTE) as client:
+        response = await client.get("/api/v1/tasks", headers={"Authorization": "Bearer "})
+    assert response.status_code == 401
+
+
+def _middleware(seen: list[Any]) -> BearerAuthMiddleware:
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        seen.append(access_of(scope))
+
+    return BearerAuthMiddleware(
+        app, token=TOKEN, reports_token=REPORTS, content_token=CONTENT,
+        auth_disabled=False, trust_loopback=False,
+    )  # fmt: skip
+
+
+def _scope(kind: str, path: str, token: str, method: str = "GET") -> dict[str, Any]:
+    headers = [(b"authorization", f"Bearer {token}".encode())]
+    scope: dict[str, Any] = {"type": kind, "path": path, "headers": headers, "client": REMOTE}
+    if kind == "http":
+        scope["method"] = method
+    return scope
+
+
+async def test_middleware_sets_access_per_token() -> None:
+    seen: list[Any] = []
+    middleware = _middleware(seen)
+    for token in (TOKEN, CONTENT, REPORTS):
+        await middleware(_scope("http", "/api/v1/tasks", token), None, None)  # type: ignore[arg-type]
+    assert seen == [Access.admin, Access.content, Access.reports]
+    assert access_of({"type": "http"}) is Access.reports  # no middleware: least privilege
+
+
+async def test_websocket_reports_scope_closed() -> None:
+    seen: list[Any] = []
+    sent: list[Any] = []
+
+    async def send(message: Any) -> None:
+        sent.append(message)
+
+    middleware = _middleware(seen)
+    await middleware(_scope("websocket", "/api/v1/tasks", REPORTS), None, send)  # type: ignore[arg-type]
+    assert seen == [] and sent == [{"type": "websocket.close", "code": 1008, "reason": ""}]

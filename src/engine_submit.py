@@ -123,6 +123,8 @@ async def _insert(engine: "TaskEngine", row: dict[str, Any], dedupe: bool) -> di
             window = float(engine.settings.dedupe_window_s)
             existing = await find_duplicate(db, row["fingerprint"], window, row["created_at"])
             if existing is not None:
+                # Counted by /metrics/savings: submitted + deduplicated = submit calls.
+                await engine._event(db, existing, "deduplicated", {"agent": row["agent"]})
                 return {
                     "task_id": existing,
                     "status": await engine._column(db, existing, "status"),

@@ -8,7 +8,10 @@ import pytest
 from src.database import SCHEMA_VERSION, close_db, get_db, init_db, write_tx
 from src.tasks import Task
 
-EXPECTED_TABLES = {"tasks", "attempts", "steps", "events", "answers"}
+EXPECTED_TABLES = {
+    "tasks", "attempts", "attempt_models", "steps", "events", "answers", "summaries",
+    "summary_runs",
+}  # fmt: skip
 
 
 @pytest.fixture
@@ -32,6 +35,9 @@ async def test_init_creates_tables(db_path: Path) -> None:
         "idx_tasks_status",
         "idx_tasks_created_at_id",
         "idx_events_task_id",
+        "idx_events_task_type_at",
+        "idx_attempts_ended_at",
+        "idx_tasks_completed_at",
     } <= indexes
 
     async with db.execute("PRAGMA journal_mode") as cur:
@@ -104,7 +110,7 @@ async def test_write_tx_cancellation_leaves_connection_usable(db_path: Path, tic
 async def test_user_version_set_on_new_db(db_path: Path) -> None:
     async with get_db().execute("PRAGMA user_version") as cur:
         row = await cur.fetchone()
-    assert row is not None and row[0] == SCHEMA_VERSION == 6
+    assert row is not None and row[0] == SCHEMA_VERSION == 9
     await init_db(db_path)  # an existing current-version DB opens fine
 
 
@@ -112,7 +118,7 @@ async def test_newer_user_version_rejected(tmp_path: Path) -> None:
     path = tmp_path / "future.db"
     with sqlite3.connect(path) as conn:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-    with pytest.raises(RuntimeError, match=r"schema version 7 is newer than this code \(6\)"):
+    with pytest.raises(RuntimeError, match=r"schema version 10 is newer than this code \(9\)"):
         await init_db(path)
 
 
@@ -154,7 +160,7 @@ async def test_version_1_database_migrated(tmp_path: Path) -> None:
         assert "detail" in columns
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 6
+        assert row is not None and row[0] == 9
         async with db.execute("SELECT task_id, n, outcome, detail FROM attempts") as cur:
             assert [tuple(r) for r in await cur.fetchall()] == [("t1", 1, "ok", None)]
         await init_db(path)  # reopening the migrated DB is a no-op
@@ -162,21 +168,21 @@ async def test_version_1_database_migrated(tmp_path: Path) -> None:
         await close_db()
 
 
-async def test_fresh_database_created_at_version_6(tmp_path: Path) -> None:
+async def test_fresh_database_created_at_version_9(tmp_path: Path) -> None:
     await init_db(tmp_path / "fresh.db")
     try:
         async with get_db().execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 6
+        assert row is not None and row[0] == 9
     finally:
         await close_db()
 
 
-async def test_version_7_database_rejected(tmp_path: Path) -> None:
-    path = tmp_path / "v7.db"
+async def test_version_10_database_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "v10.db"
     with sqlite3.connect(path) as conn:
-        conn.execute("PRAGMA user_version = 7")
-    with pytest.raises(RuntimeError, match="schema version 7 is newer"):
+        conn.execute("PRAGMA user_version = 10")
+    with pytest.raises(RuntimeError, match="schema version 10 is newer"):
         await init_db(path)
 
 
@@ -209,6 +215,71 @@ async def test_version_5_database_migrated_to_6(tmp_path: Path) -> None:
     assert not list(tmp_path.glob("*.bak"))
 
 
+STAGE_COLUMNS = (
+    "agent_type", "model", "stage_tokens", "tool_calls", "last_tool", "duration_s",
+    "last_progress_at",
+)  # fmt: skip
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0), reason="the fixture drops a column (SQLite 3.35+)"
+)
+async def test_v6_database_migrates_to_v7(tmp_path: Path) -> None:
+    """v7 adds the stage numbers to steps (NULL for existing rows)."""
+    path = tmp_path / "v6.db"
+    await init_db(path)
+    await close_db()
+    with sqlite3.connect(path) as conn:
+        for column in STAGE_COLUMNS:
+            conn.execute(f"ALTER TABLE steps DROP COLUMN {column}")
+        conn.execute("INSERT INTO steps (task_id, label, status) VALUES ('t1', 'plan', 'running')")
+        conn.execute("PRAGMA user_version = 6")
+    await init_db(path)
+    try:
+        async with get_db().execute("PRAGMA table_info(steps)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        assert set(STAGE_COLUMNS) <= columns
+        async with get_db().execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None and row[0] == 9
+        async with get_db().execute("SELECT stage_tokens FROM steps") as cur:
+            assert [tuple(r) for r in await cur.fetchall()] == [(None,)]
+    finally:
+        await close_db()
+    fresh = tmp_path / "fresh.db"
+    await init_db(fresh)
+    await close_db()
+    assert await _schema(path) == await _schema(fresh)
+
+
+@pytest.mark.parametrize(
+    ("version", "tables"),
+    [(7, ("attempt_models", "summaries", "summary_runs")), (8, ("summaries", "summary_runs"))],
+)
+async def test_v7_and_v8_databases_migrate(
+    tmp_path: Path, version: int, tables: tuple[str, ...]
+) -> None:
+    """v8 adds attempt_models, v9 summaries and summary_runs."""
+    path = tmp_path / f"v{version}.db"
+    await init_db(path)
+    await close_db()
+    with sqlite3.connect(path) as conn:
+        for table in tables:
+            conn.execute(f"DROP TABLE {table}")
+        conn.execute(f"PRAGMA user_version = {version}")
+    await init_db(path)
+    try:
+        async with get_db().execute("PRAGMA user_version") as cur:
+            row = await cur.fetchone()
+        assert row is not None and row[0] == 9
+    finally:
+        await close_db()
+    fresh = tmp_path / "fresh.db"
+    await init_db(fresh)
+    await close_db()
+    assert await _schema(path) == await _schema(fresh)
+
+
 async def test_version_2_database_migrated_to_3(tmp_path: Path) -> None:
     path = tmp_path / "v2.db"
     with sqlite3.connect(path) as conn:
@@ -228,7 +299,7 @@ async def test_version_2_database_migrated_to_3(tmp_path: Path) -> None:
         db = get_db()
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 6
+        assert row is not None and row[0] == 9
         async with db.execute(
             "SELECT label, started_count, attempt, prev_started_count FROM steps"
         ) as cur:
@@ -265,7 +336,7 @@ async def test_version_3_database_migrated_to_4(tmp_path: Path) -> None:
         db = get_db()
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 6
+        assert row is not None and row[0] == 9
         async with db.execute("SELECT * FROM tasks") as cur:
             task = Task.from_row(await cur.fetchone())  # type: ignore[arg-type]
         assert (task.resumes, task.stage_retries, task.corrective) == (2, 0, 0)
@@ -323,7 +394,7 @@ async def test_version_4_database_migrated_to_5(tmp_path: Path) -> None:
         db = get_db()
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 6
+        assert row is not None and row[0] == 9
         async with db.execute("SELECT * FROM tasks") as cur:
             task = Task.from_row(await cur.fetchone())  # type: ignore[arg-type]
         assert (task.id, task.resumes) == ("t1", 2)
@@ -403,3 +474,16 @@ async def test_failed_backup_aborts_migration(
     with sqlite3.connect(path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 4  # not migrated
     assert not list(tmp_path.glob("*.bak*"))
+
+
+async def test_events_type_at_index_serves_window_queries(tmp_path: Path) -> None:
+    await init_db(tmp_path / "d.db")
+    try:
+        async with get_db().execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM events e WHERE e.type IN ('a', 'b') "
+            "AND e.at >= 1 AND e.at < 2"
+        ) as cur:
+            plan = " ".join(str(r["detail"]) for r in await cur.fetchall())
+    finally:
+        await close_db()
+    assert "idx_events_type_at" in plan, plan

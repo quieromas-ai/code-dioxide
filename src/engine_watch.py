@@ -8,7 +8,15 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src import engine_lifecycle, engine_recovery, engine_sweep, procs, recovery, usage
+from src import (
+    engine_lifecycle,
+    engine_recovery,
+    engine_sweep,
+    model_usage,
+    procs,
+    recovery,
+    usage,
+)
 from src.classify import Outcome, auth_message, classify
 from src.config import CHILD_ENV_NAME
 from src.database import after_commit, get_db, write_tx
@@ -92,11 +100,26 @@ async def watch(engine: "TaskEngine", attempt: Attempt) -> None:
     state: dict[str, Any] = {"calls": 0, "killed": False, "denied": set()}
     if attempt.boot:
         state["denied"] = await _denied_before(task.id, attempt.started_at)
+    try:
+        await _watch(engine, attempt, watcher, events, state)
+    finally:
+        engine.activity.drop(task.id, attempt.n)
+
+
+async def _watch(
+    engine: "TaskEngine",
+    attempt: Attempt,
+    watcher: StreamWatcher,
+    events: list[Ev],
+    state: dict[str, Any],
+) -> None:
+    task = attempt.task
     # Every read of the stream runs off the event loop (a re-attached attempt replays the
     # whole stream); one poll at a time, in order (each one is awaited before the next).
     while True:
         new = await asyncio.to_thread(watcher.poll)
         events += new
+        engine.activity.update(task.id, attempt.n, new, time.time())
         await engine._inspect(attempt, new, state)
         await _record_descendants(engine, attempt)
         if task.is_lifecycle:
@@ -397,7 +420,10 @@ async def finish_attempt(
                 await engine._event(db, task_id, "auth_failed", data)
             status = update["status"]
         clean = update is not None and is_clean_exit(status, current.kill_reason)
-        await db.execute(
+        models = model_usage.model_shares(
+            last, prior, await model_usage.prior_models(db, task_id, attempt.n)
+        )
+        ended = await db.execute(
             "UPDATE attempts SET ended_at = ?, exit_code = ?, outcome = ?, reason = ?, "
             "cost_usd = ?, tokens = ?, running_s = ? "
             "WHERE task_id = ? AND n = ? AND ended_at IS NULL",
@@ -407,6 +433,8 @@ async def finish_attempt(
                 (attempt.gone_at or now) - attempt.started_at, task_id, attempt.n,
             ),
         )  # fmt: skip
+        if ended.rowcount and models is not None:
+            await model_usage.write_models(db, task_id, attempt.n, models)
         if update is not None:
             if (
                 not attempt.task.is_lifecycle

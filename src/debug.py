@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
+import aiosqlite
+
 from src import journal
 from src.config import ENV_PREFIX
 from src.engine import TaskEngine
@@ -281,12 +283,14 @@ async def task_logs(
     cursor: str | None = None,
     limit: int = 200,
     full: bool = False,
+    db: aiosqlite.Connection | None = None,
 ) -> dict[str, Any]:
+    """``db``: the connection the task's rows are read on (default: the shared one)."""
     try:
         position = decode_cursor(cursor, _key(engine), _scope(task_id))
     except BadCursor:
         return {"error": "bad cursor"}
-    view = await load_view(task_id)
+    view = await load_view(task_id, db)
     if view is None:
         return not_found(task_id)
 

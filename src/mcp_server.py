@@ -9,6 +9,7 @@ from mcp.server.mcpserver import MCPServer
 
 from src import bundle, debug, runlocator
 from src.engine import TaskEngine
+from src.reports.query import Filters
 from src.roles import Roles
 from src.tasks import KIND_SINGLE, WAIT_ENDS
 
@@ -45,6 +46,8 @@ RETURN_KEYS: dict[str, frozenset[str]] = {
             "cost_usd",
             "cost_partial",
             "tokens_used",
+            "uncounted_attempts",
+            "cost_complete",
             "waiting",
             "waiting.until",
             "waiting.why",
@@ -68,7 +71,7 @@ def engine_unavailable() -> dict[str, Any]:
     return dict(_ENGINE_NOT_STARTED)
 
 
-def _roles_by_agent(roles: Roles | None) -> dict[str, list[str]]:
+def roles_by_agent(roles: Roles | None) -> dict[str, list[str]]:
     if roles is None:
         return {}
     assignments: list[tuple[str, str | None]] = [
@@ -106,7 +109,7 @@ class ToolProvider:
     async def _list_agents(self, engine: TaskEngine) -> list[tuple[dict[str, Any], list[str]]]:
         """(orcai-shaped agent record, the roles.yaml roles it fills) per boot-registry agent."""
         await engine.refresh_agents()
-        roles = _roles_by_agent(engine.roles)
+        roles = roles_by_agent(engine.roles)
         busy = await engine.busy_agents()
         listed = []
         for slug, agent in engine.agents.items():
@@ -207,11 +210,21 @@ class ToolProvider:
         return self._out(engine, await engine.cancel(task_id))
 
     async def list_tasks(
-        self, status: str | None, agent: str | None, limit: int, cursor: str | None
+        self,
+        status: str | None,
+        agent: str | None,
+        limit: int,
+        cursor: str | None,
+        filters: Filters | None = None,
     ) -> dict[str, Any]:
         if (engine := self.engine) is None:
             return engine_unavailable()
-        return self._out(engine, await engine.list(status, agent, limit, cursor))
+        f = filters or Filters()
+        listed = await engine.list(
+            status, agent, limit, cursor,
+            project=f.project, kind=f.kind, since=f.since, until=f.until,
+        )  # fmt: skip
+        return self._out(engine, listed)
 
     async def get_task_logs(
         self, task_id: str, source: str | None, cursor: str | None, limit: int, full: bool

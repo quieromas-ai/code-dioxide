@@ -947,6 +947,26 @@ async def test_upsert_running_step_takes_measured_start_only(env: Env) -> None:
     assert row["started_at"] == start
 
 
+async def test_cached_replay_keeps_stage_numbers(env: Env) -> None:
+    task_id = await lifecycle(env)
+    step = JournalStep("k1", "plan@a1", "Plan", "completed", {}, 1, "aplan")
+    measured = {
+        "label": "plan@a1", "agentType": "dx-planner", "model": "m", "tokens": 55092,
+        "toolCalls": 14, "lastToolName": "Bash", "durationMs": 132148,
+        "lastProgressAt": 1795366215414,
+    }  # fmt: skip
+    async with write_tx() as db:
+        await engine_lifecycle._upsert(db, task_id, 1, step, None, [measured], (None, None))
+    (row,) = await rows("SELECT * FROM steps WHERE label = 'plan@a1'")
+    replay = [{"label": "plan@a1", "cached": True, "tokens": None}]
+    async with write_tx() as db:
+        await engine_lifecycle._upsert(db, task_id, 2, step, dict(row), replay, (None, None))
+    (row,) = await rows("SELECT * FROM steps WHERE label = 'plan@a1'")
+    assert (row["stage_tokens"], row["tool_calls"], row["duration_s"]) == (55092, 14, 132.148)
+    assert (row["agent_type"], row["model"], row["last_tool"]) == ("dx-planner", "m", "Bash")
+    assert row["last_progress_at"] == 1795366215.414 and row["cached"] == 1
+
+
 async def test_stage_rate_limit_falls_back_to_the_mapped_model(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:

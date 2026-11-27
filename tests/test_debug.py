@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from starlette.requests import ClientDisconnect
 
 from src import debug, engine_lifecycle, journal, logpager, rest_api, runlocator, serverlog
+from src.auth import Access
 from src.config import Settings
 from src.database import write_tx
 from src.logpager import Cursor, Source, decode_cursor, load_key, read_page
@@ -35,6 +36,7 @@ from tests.helpers import (
     wait_for,
     wait_status,
 )
+from tests.reports_fixture import AsAccess
 from tests.stub_claude import make_launcher
 from tests.test_engine_single import write_edit
 
@@ -73,6 +75,8 @@ def router_app(env: Env, keepalive_s: float = 0.05) -> FastAPI:
     provider.attach(env.engine)
     app = FastAPI()
     app.include_router(build_router(provider, keepalive_s=keepalive_s, poll_s=0.02))
+
+    app.add_middleware(AsAccess, access=Access.admin)  # what the auth layer sets
     return app
 
 
@@ -837,13 +841,18 @@ async def test_bundle_contains_no_secret_and_expected_members(
 
 async def test_config_start_log_has_no_tokens(tmp_path: Path) -> None:
     settings = Settings(
-        home=tmp_path, auth_token=TOKEN, redact_env_files=[tmp_path / "missing.env"]
+        home=tmp_path,
+        auth_token=TOKEN,
+        reports_token="reports-token-value",
+        content_token="content-token-value",
+        redact_env_files=[tmp_path / "missing.env"],
     )
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         pass
     log = settings.server_log_path.read_text()
     assert TOKEN not in log
+    assert "reports-token-value" not in log and "content-token-value" not in log
     records = [json.loads(line) for line in log.splitlines()]
     (config,) = [r["config"] for r in records if r["msg"] == "config at start"]
     assert config["port"] == 8500 and "auth_token" not in config

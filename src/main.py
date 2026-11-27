@@ -19,6 +19,8 @@ from src.engine import TaskEngine
 from src.logpager import MAX_CURSOR_CHARS, load_key
 from src.mcp_server import ToolProvider, build_mcp
 from src.redact import Redactor
+from src.reports.db import close_read_db, open_read_db
+from src.reports.routes import install_reports
 from src.rest_api import build_router
 from src.roles import load_registry
 from src.runstore import RunStore
@@ -28,7 +30,7 @@ PRIVATE_FILE_MODE = 0o600
 # The SDK's own DNS-rebinding allowlist for a loopback bind; kept when `allowed_hosts` is set.
 _LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 _LOOPBACK_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
-SECRET_FIELDS = {"auth_token"}
+SECRET_FIELDS = {"auth_token", "reports_token", "content_token"}
 # REST log cursors travel in the query string (`?cursor=`). A realistic merged-view cursor is a
 # few KiB (about 1-3 KiB for 20-75 sources), but the pager accepts up to MAX_CURSOR_CHARS, far
 # above h11's 16 KiB default for the request head. The limit covers a cap-size cursor plus the
@@ -136,16 +138,19 @@ def create_app(settings: Settings) -> FastAPI:
             try:
                 _private_file(settings.db_path)
                 await init_db(settings.db_path)
+                await open_read_db(settings.db_path)
             except (OSError, sqlite3.Error, RuntimeError) as exc:
                 logger.error("database unusable", extra={"error": str(exc)})
                 failures.append(f"database {settings.db_path}: {exc}")
-                await close_db()  # an open connection's thread would keep the process alive
+                await close_read_db()  # an open connection's thread would keep the process alive
+                await close_db()
                 raise
             try:
                 load_key(settings.cursor_key_path)  # created once (0600) before logs are paged
             except RuntimeError as exc:
                 logger.error("cursor key unusable", extra={"error": str(exc)})
                 failures.append(str(exc))
+                await close_read_db()
                 await close_db()
                 raise
             if stale := bundle.sweep_stale(settings.data_dir):
@@ -160,6 +165,7 @@ def create_app(settings: Settings) -> FastAPI:
             finally:
                 provider.detach()
                 await engine.stop()
+                await close_read_db()
                 await close_db()
                 logger.info("dioxide stopped")
 
@@ -168,14 +174,17 @@ def create_app(settings: Settings) -> FastAPI:
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
-        openapi_url=None,
+        openapi_url="/api/v1/openapi.json",  # interactive docs stay off
     )
+    install_reports(app, provider)
     app.include_router(build_router(provider))
     # The MCP sub-app serves its own /mcp route; FastAPI routes above take precedence.
     app.mount("/", mcp_app)
     app.add_middleware(
         BearerAuthMiddleware,
         token=settings.auth_token,
+        reports_token=settings.reports_token,
+        content_token=settings.content_token,
         auth_disabled=settings.auth_disabled,
         trust_loopback=settings.trust_loopback,
     )

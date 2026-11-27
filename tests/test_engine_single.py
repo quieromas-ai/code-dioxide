@@ -281,6 +281,20 @@ async def test_submit_rejects_bad_input(env: Env, tmp_path: Path) -> None:
     assert await rows("SELECT id FROM tasks") == []
 
 
+async def test_dedupe_writes_event(env: Env) -> None:
+    first = await submit(env, "Same work")
+    second = await submit(env, "Same work")
+    assert second["deduplicated"] is True and second["task_id"] == first["task_id"]
+    found = await rows(
+        "SELECT type, data_json FROM events WHERE task_id = ? AND type IN "
+        "('submitted', 'deduplicated') ORDER BY id",
+        first["task_id"],
+    )
+    assert [(r["type"], json.loads(r["data_json"])) for r in found] == [
+        ("submitted", {"agent": "implementer"}), ("deduplicated", {"agent": "implementer"}),
+    ]  # fmt: skip
+
+
 async def test_submit_rejects_when_queue_full(env: Env) -> None:
     env.settings.task_queue_size = 1
     assert (await submit(env, "One"))["status"] == "queued"

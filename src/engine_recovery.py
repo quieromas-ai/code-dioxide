@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
-from src import engine_sweep, journal, recovery
+from src import engine_sweep, journal, recovery, usage
 from src.classify import Outcome
 from src.database import write_tx
 from src.serverlog import LOGGER_NAME
@@ -227,9 +227,9 @@ async def spawn_failed(engine: "TaskEngine", attempt: "Attempt", exc: Exception)
     _log.error(error, extra={"task_id": attempt.task.id})
     async with write_tx() as db:
         await db.execute(
-            "UPDATE attempts SET ended_at = ?, outcome = ?, reason = 'spawn_failed', "
+            "UPDATE attempts SET ended_at = ?, outcome = ?, reason = ?, "
             "detail = ?, running_s = 0 WHERE task_id = ? AND n = ?",
-            (now, Outcome.fatal.value, error, attempt.task.id, attempt.n),
+            (now, Outcome.fatal.value, usage.SPAWN_FAILED, error, attempt.task.id, attempt.n),
         )
         await db.execute(
             "UPDATE tasks SET status = 'failed', error = ?, completed_at = ?, updated_at = ? "

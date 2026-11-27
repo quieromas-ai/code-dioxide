@@ -155,11 +155,22 @@ def launch_env(
     """Child environment: every ``DIOXIDE_*`` variable removed except the task marker, then the
     child env file's variables (``child_env``: credentials) added; dioxide's own variables (the
     background-wait ceiling, the task marker, ``extra_path``) are applied last and win."""
+    env = child_process_env(settings, base_env, child_env)
+    env[TASK_MARKER] = task.id
+    return env
+
+
+def child_process_env(
+    settings: Settings,
+    base_env: Mapping[str, str] | None = None,
+    child_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """``launch_env`` without the task marker: for a claude run that belongs to no task (a
+    summary), so no task's sweep counts it among the task's processes."""
     source = os.environ if base_env is None else base_env
     env = {k: v for k, v in source.items() if not k.startswith(ENV_PREFIX)}
     env.update(child_env or {})
     env[BG_WAIT_VAR] = "0"
-    env[TASK_MARKER] = task.id
     if settings.extra_path:
         current = env.get("PATH")
         env["PATH"] = os.pathsep.join([*settings.extra_path, *([current] if current else [])])

@@ -28,6 +28,7 @@ from src.launcher import SCRIPT_NAME
 from src.lifecycle_args import build_lifecycle_args
 from src.logpager import iso
 from src.serverlog import LOGGER_NAME
+from src.stages import stage_numbers
 from src.stream import WorkflowAck
 from src.tasks import Task
 from src.usage import Usage
@@ -404,19 +405,34 @@ async def _upsert(
         if completed and (row is None or row["status"] != "completed")
         else ((row["git_branch"], row["git_head"]) if row is not None else (None, None))
     )
+    # A cached (replayed) entry or a missing number keeps the stored one: it belongs to the run
+    # that measured the stage.
+    entry = next((e for e in progress if e.get("label") == step.label), None)
+    numbers = stage_numbers(entry)
     await db.execute(
         "INSERT INTO steps (task_id, label, phase, status, started_count, cached, agent_id, "
-        "git_branch, git_head, started_at, finished_at, attempt, prev_started_count) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (task_id, label) DO UPDATE SET "
+        "git_branch, git_head, started_at, finished_at, attempt, prev_started_count, "
+        "agent_type, model, stage_tokens, tool_calls, last_tool, duration_s, last_progress_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (task_id, label) DO UPDATE SET "
         "phase = excluded.phase, status = excluded.status, started_count = excluded.started_count, "
         "cached = excluded.cached, agent_id = excluded.agent_id, git_branch = excluded.git_branch, "
         "git_head = excluded.git_head, started_at = excluded.started_at, "
         "finished_at = excluded.finished_at, "
-        "attempt = excluded.attempt, prev_started_count = excluded.prev_started_count",
+        "attempt = excluded.attempt, prev_started_count = excluded.prev_started_count, "
+        "agent_type = coalesce(excluded.agent_type, steps.agent_type), "
+        "model = coalesce(excluded.model, steps.model), "
+        "stage_tokens = coalesce(excluded.stage_tokens, steps.stage_tokens), "
+        "tool_calls = coalesce(excluded.tool_calls, steps.tool_calls), "
+        "last_tool = coalesce(excluded.last_tool, steps.last_tool), "
+        "duration_s = coalesce(excluded.duration_s, steps.duration_s), "
+        "last_progress_at = coalesce(excluded.last_progress_at, steps.last_progress_at)",
         (
             task_id, step.label, step.phase or phase_of(step.label), step.status,
             step.started_count, int(cached), step.agent_id, branch, head,
-            started_at, finished_at, n, prev,
+            started_at, finished_at, n, prev, numbers.agent_type, numbers.model,
+            numbers.stage_tokens, numbers.tool_calls, numbers.last_tool, numbers.duration_s,
+            numbers.last_progress_at,
         ),
     )  # fmt: skip
 

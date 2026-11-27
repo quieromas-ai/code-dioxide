@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import aiosqlite
+
 from src import journal
 from src.database import get_db
 from src.engine import TaskEngine
@@ -41,8 +43,9 @@ async def task_exists(task_id: str) -> bool:
         return await cur.fetchone() is not None
 
 
-async def load_view(task_id: str) -> TaskView | None:
-    db = get_db()
+async def load_view(task_id: str, db: aiosqlite.Connection | None = None) -> TaskView | None:
+    """The task's rows; ``db``: the connection to read on (default: the shared one)."""
+    db = get_db() if db is None else db
     async with db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)) as cur:
         row = await cur.fetchone()
     if row is None:

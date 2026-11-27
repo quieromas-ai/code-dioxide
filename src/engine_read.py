@@ -7,6 +7,8 @@ import json
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
+import aiosqlite
+
 from src import engine_lifecycle, recovery, stream, usage
 from src.database import get_db
 from src.logpager import iso
@@ -42,7 +44,8 @@ async def status(engine: "TaskEngine", task_id: str) -> dict[str, Any]:
     if row is None:
         return {"task_id": task_id, "status": "not_found", "error": f"task {task_id} not found"}
     task = Task.from_row(row)
-    cost, tokens, partial = await _usage(engine, task)
+    cost, tokens, partial = await task_usage(engine, task, db)
+    uncounted = (await usage.uncounted_attempts(db, [task_id])).get(task_id, 0)
     steps = (
         await engine_lifecycle.step_list(
             task_id,
@@ -52,7 +55,7 @@ async def status(engine: "TaskEngine", task_id: str) -> dict[str, Any]:
         if task.is_lifecycle
         else []
     )
-    waiting = await _waiting(engine, task)
+    waiting = await waiting_of(engine, task, db)
     ended_wait = await _ended_during_rate_limit_wait(task)
     return {
         "task_id": task.id,
@@ -71,40 +74,74 @@ async def status(engine: "TaskEngine", task_id: str) -> dict[str, Any]:
         "cost_usd": cost,
         "cost_partial": partial,
         "tokens_used": tokens,
+        "uncounted_attempts": uncounted,
+        "cost_complete": uncounted == 0,
         "waiting": waiting,
         "kill_reason": task.kill_reason,
         "recovery": _recovery(engine, task, waiting, ended_wait=ended_wait),
     }
 
 
-async def _usage(engine: "TaskEngine", task: Task) -> tuple[float, int | None, bool]:
+async def task_usage(
+    engine: "TaskEngine", task: Task, db: aiosqlite.Connection
+) -> tuple[float, int | None, bool]:
     """Cost and tokens of a task so far: its finished attempts (written at attempt end) plus, for
     an attempt still running, the last interim ``result`` record of its stream. ``partial`` is true
     while the task runs an attempt: the figures can still grow. An open attempt row on a task that
     is not running (a leftover) adds nothing."""
     task_id = task.id
-    db = get_db()
     async with db.execute(
         "SELECT SUM(cost_usd) AS cost, SUM(tokens) AS tokens FROM attempts WHERE task_id = ?",
         (task_id,),
     ) as cur:
         sums = await cur.fetchone()
-    async with db.execute(
-        "SELECT MAX(n) AS n FROM attempts WHERE task_id = ? AND ended_at IS NULL", (task_id,)
-    ) as cur:
-        open_attempt = (await cur.fetchone() or {"n": None})["n"]
     cost = float(sums["cost"] or 0.0) if sums else 0.0
     tokens = sums["tokens"] if sums else None
-    if open_attempt is None or task.status != "running":
+    found = await open_attempt_share(engine, task, db)
+    if found is None:
         return cost, tokens, False
-    path = engine.runstore.attempt_paths(task_id, open_attempt)[0]
-    interim = await asyncio.to_thread(stream.last_interim_result, path)
-    if interim is not None:  # its share: a resumed session's total includes earlier attempts
-        prior = await usage.session_usage_before(db, task_id, open_attempt)
-        share = usage.attempt_usage(interim, prior)
+    _, share = found
+    if share is not None:
         cost += share.cost_usd or 0.0
         tokens = (tokens or 0) + (share.tokens or 0)
     return cost, tokens, True
+
+
+async def open_attempt_interim(
+    engine: "TaskEngine", task: Task, db: aiosqlite.Connection
+) -> tuple[int, stream.Result | None] | None:
+    """A running task's open attempt: its number and the last interim ``result`` record of its
+    stream (None before the first one), from the watcher's activity cache, else the stream's
+    tail. None for a task not running (an open attempt row then is a leftover)."""
+    if task.status != "running":
+        return None
+    async with db.execute(
+        "SELECT MAX(n) AS n FROM attempts WHERE task_id = ? AND ended_at IS NULL", (task.id,)
+    ) as cur:
+        open_attempt = (await cur.fetchone() or {"n": None})["n"]
+    if open_attempt is None:
+        return None
+    cached = engine.activity.get(task.id, open_attempt)
+    if cached is not None:  # the watcher has read the stream: no file read
+        return open_attempt, cached.last_result
+    path = engine.runstore.attempt_paths(task.id, open_attempt)[0]
+    return open_attempt, await asyncio.to_thread(stream.last_interim_result, path)
+
+
+async def open_attempt_share(
+    engine: "TaskEngine", task: Task, db: aiosqlite.Connection
+) -> tuple[int, usage.Usage | None] | None:
+    """The open attempt (``open_attempt_interim``): its number and its share of the interim
+    record (None before the first one). A resumed session's total includes earlier attempts, so
+    the share subtracts them. The one source of interim figures for status, lists and metrics."""
+    found = await open_attempt_interim(engine, task, db)
+    if found is None:
+        return None
+    open_attempt, interim = found
+    if interim is None:
+        return open_attempt, None
+    prior = await usage.session_usage_before(db, task.id, open_attempt)
+    return open_attempt, usage.attempt_usage(interim, prior)
 
 
 def _budget(used: float, limit: float) -> dict[str, float]:
@@ -161,16 +198,13 @@ async def _ended_during_rate_limit_wait(task: Task) -> bool:
     return row is not None and json.loads(row["data_json"]).get("why") == recovery.RATE_LIMITED
 
 
-async def _waiting(engine: "TaskEngine", task: Task) -> dict[str, Any] | None:
-    """A task queued for a later time: until when, and why (from the event that scheduled it:
-    a decider's ``retry_scheduled`` or a pre-launch sweep's ``sweep_requeued``)."""
-    at = task.next_attempt_at
-    if task.status != "queued" or at is None or at <= engine._clock():
-        return None
-    async with get_db().execute(
-        "SELECT type, data_json FROM events WHERE task_id = ? "
+async def scheduling_event(db: aiosqlite.Connection, task_id: str) -> tuple[str, float | None]:
+    """Why a queued task waits, and since when: the last event that scheduled it (a decider's
+    ``retry_scheduled`` or a pre-launch sweep's ``sweep_requeued``)."""
+    async with db.execute(
+        "SELECT type, data_json, at FROM events WHERE task_id = ? "
         "AND type IN ('retry_scheduled', 'sweep_requeued') ORDER BY id DESC LIMIT 1",
-        (task.id,),
+        (task_id,),
     ) as cur:
         row = await cur.fetchone()
     data = json.loads(row["data_json"]) if row is not None else {}
@@ -178,17 +212,47 @@ async def _waiting(engine: "TaskEngine", task: Task) -> dict[str, Any] | None:
         why = "sweep_unconfirmed" if "streak" in data else "sweep"
     else:
         why = "rate_limit" if data.get("why") == recovery.RATE_LIMITED else "backoff"
+    return why, (row["at"] if row is not None else None)
+
+
+async def waiting_of(
+    engine: "TaskEngine", task: Task, db: aiosqlite.Connection
+) -> dict[str, Any] | None:
+    """A task queued for a later time: until when, and why (``scheduling_event``)."""
+    at = task.next_attempt_at
+    if task.status != "queued" or at is None or at <= engine._clock():
+        return None
+    why, _ = await scheduling_event(db, task.id)
     return {"until": iso(at), "why": why}
 
 
 async def list_tasks(
-    engine: "TaskEngine", status: str | None, agent: str | None, limit: int, cursor: str | None
+    engine: "TaskEngine",
+    status: str | None,
+    agent: str | None,
+    limit: int,
+    cursor: str | None,
+    *,
+    project: str | None = None,
+    kind: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
 ) -> dict[str, Any]:
+    """A page of tasks, newest first; ``since``/``until`` bound ``created_at``."""
     clauses: list[str] = []
     params: list[Any] = []
     if status:
         clauses.append("status = ?")
         params.append(status)
+    for clause, value in (
+        ("cwd = ?", project),
+        ("kind = ?", kind),
+        ("created_at >= ?", since),
+        ("created_at < ?", until),
+    ):
+        if value is not None:
+            clauses.append(clause)
+            params.append(value)
     if agent:
         with suppress(KeyError):
             agent = engine.resolve(agent)
@@ -210,6 +274,7 @@ async def list_tasks(
         found = [Task.from_row(r) for r in await cur.fetchall()]
     page = found[:limit]
     costs, steps = await _page_costs_and_steps([t.id for t in page])
+    uncounted = await usage.uncounted_attempts(get_db(), [t.id for t in page])
     tasks = [
         {
             "task_id": t.id, "agent": t.agent, "kind": t.kind, "status": t.status,
@@ -219,6 +284,8 @@ async def list_tasks(
             "branch": t.branch, "worktree": t.worktree,
             "stage": _stage(t, steps.get(t.id, [])),
             "cost_usd": costs.get(t.id, 0.0),
+            "uncounted_attempts": uncounted.get(t.id, 0),
+            "cost_complete": not uncounted.get(t.id, 0),
         }
         for t in page
     ]  # fmt: skip

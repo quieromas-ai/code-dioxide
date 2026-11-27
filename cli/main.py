@@ -610,15 +610,23 @@ def _print_plan(plan: Plan) -> None:
                 _usage_text(a.new.cost_usd, a.new.tokens),
             )
             click.echo(f"{fix.task_id} attempt {a.n}: {old} -> {new}")
+        for m in fix.models:
+            names = ", ".join(sorted(m.shares)) or "none (split removed)"
+            click.echo(f"{fix.task_id} attempt {m.n} models: {names}")
         if fix.output_json is not None:
             out = json.loads(fix.output_json)
             click.echo(f"{fix.task_id} output: {_usage_text(out['cost_usd'], out['tokens_used'])}")
     for skip in plan.skipped:
         click.echo(f"{skip.task_id} skipped: {skip.reason}")
+    for stage in plan.stages:
+        click.echo(f"{stage.task_id} stage {stage.label}: numbers from run.json")
     rows = sum(len(f.attempts) for f in plan.fixes)
     outputs = sum(f.output_json is not None for f in plan.fixes)
+    splits = sum(len(f.models) for f in plan.fixes)
     click.echo(
-        f"{rows} attempt rows, {outputs} outputs to change; {len(plan.skipped)} tasks skipped"
+        f"{rows} attempt rows, {outputs} outputs, {splits} model splits, "
+        f"{len(plan.stages)} stages to change; "
+        f"{len(plan.skipped)} tasks skipped"
     )
 
 
@@ -647,13 +655,13 @@ def repair_usage(apply_: bool) -> None:
                 _fail(
                     f"database schema v{version}, this code v{SCHEMA_VERSION}: start dioxide once"
                 )
-            plan = plan_repair(conn)
+            plan = plan_repair(conn, settings.runs_dir)
             _print_plan(plan)
             if not apply_:
-                if plan.fixes:
+                if not plan.empty:
                     click.echo("dry run: run with --apply to write (stop dioxide first)")
                 return
-            if plan.fixes:
+            if not plan.empty:
                 click.echo(f"backup: {backup(conn, db_path)}")
                 apply_plan(conn, plan)
                 click.echo("applied")

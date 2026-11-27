@@ -12,6 +12,7 @@ from src.database import close_db, init_db
 from src.engine import TaskEngine
 from src.redact import Redactor
 from src.registry import load_agents
+from src.reports.db import close_read_db, open_read_db
 from src.roles import load_roles
 from src.runstore import RunStore
 from tests.helpers import DETACHED, Env, make_home, make_repo
@@ -83,3 +84,13 @@ async def env(
     finally:
         await engine.stop()
         await close_db()
+
+
+@pytest.fixture
+async def reports(env: Env) -> AsyncIterator[Env]:
+    """``env`` with the read-only reporting connection open."""
+    await open_read_db(env.settings.db_path)
+    try:
+        yield env
+    finally:
+        await close_read_db()

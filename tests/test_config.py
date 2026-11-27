@@ -328,3 +328,24 @@ def test_model_fallback_rejects_malformed_json(
 def test_model_fallback_rejects_empty_names(tmp_path: Path, mapping: dict[str, str]) -> None:
     with pytest.raises(ValidationError, match="model_fallback must map non-empty model names"):
         Settings(home=tmp_path, model_fallback=mapping)
+
+
+def test_report_tokens_must_differ(tmp_path: Path) -> None:
+    for reports, content in (("same", "same"), ("adm", ""), ("", "adm")):
+        settings = Settings(
+            home=tmp_path, auth_token="adm", reports_token=reports, content_token=content
+        )
+        with pytest.raises(ValueError, match="distinct"):
+            settings.validate_security()
+    Settings(
+        home=tmp_path, auth_token="adm", reports_token="rep", content_token="con"
+    ).validate_security()
+    Settings(home=tmp_path, auth_token="adm").validate_security()
+
+
+def test_report_tokens_read_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DIOXIDE_REPORTS_TOKEN", "rep-env-1")
+    monkeypatch.setenv("DIOXIDE_CONTENT_TOKEN", "con-env-1")
+    settings = Settings(home=tmp_path, auth_token="adm")
+    assert (settings.reports_token, settings.content_token) == ("rep-env-1", "con-env-1")
+    assert "rep-env-1" not in repr(settings) and "con-env-1" not in repr(settings)

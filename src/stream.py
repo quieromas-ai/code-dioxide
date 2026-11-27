@@ -70,6 +70,26 @@ class AuthFailed:
 
 
 @dataclass(frozen=True)
+class ModelUsage:
+    """One model's session totals from a result's ``modelUsage``."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost_usd: float | None
+
+    @property
+    def tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_tokens
+            + self.cache_write_tokens
+        )
+
+
+@dataclass(frozen=True)
 class Result:
     is_error: bool
     subtype: str | None
@@ -85,6 +105,8 @@ class Result:
     # Tokens of the whole session so far (every model, subagents included) from ``modelUsage``;
     # None when the record has none. ``tokens`` is the top-level loop of this run only.
     session_tokens: int | None = None
+    # Per model, the same session totals (``modelUsage``); None when the record has none.
+    model_usage: dict[str, ModelUsage] | None = None
 
 
 Ev = (
@@ -105,11 +127,11 @@ _TOKEN_FIELDS = (
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
 )
-_MODEL_TOKEN_FIELDS = (
+_MODEL_TOKEN_FIELDS = (  # in ModelUsage field order
     "inputTokens",
     "outputTokens",
-    "cacheCreationInputTokens",
     "cacheReadInputTokens",
+    "cacheCreationInputTokens",
 )
 
 
@@ -172,6 +194,23 @@ def _session_tokens(model_usage: Any) -> int | None:
     return sum(_int(m.get(name)) or 0 for m in models for name in _MODEL_TOKEN_FIELDS)
 
 
+def _counts(model: dict[str, Any]) -> tuple[int, int, int, int]:
+    i, o, r, w = (_int(model.get(field)) or 0 for field in _MODEL_TOKEN_FIELDS)
+    return i, o, r, w
+
+
+def _model_usage(model_usage: Any) -> dict[str, ModelUsage] | None:
+    """``modelUsage`` per model (a non-integer field counts as 0); None without a usable one."""
+    if not isinstance(model_usage, dict):
+        return None
+    found = {
+        name: ModelUsage(*_counts(m), _num(m.get("costUSD")))
+        for name, m in model_usage.items()
+        if isinstance(name, str) and isinstance(m, dict)
+    }
+    return found or None
+
+
 def _result(obj: dict[str, Any]) -> Result:
     usage = obj.get("usage")
     tokens = 0
@@ -192,7 +231,13 @@ def _result(obj: dict[str, Any]) -> Result:
         permission_denials=list(denials) if isinstance(denials, list) else [],
         result_index=_int(obj.get("result_index")),
         session_tokens=_session_tokens(obj.get("modelUsage")),
+        model_usage=_model_usage(obj.get("modelUsage")),
     )
+
+
+def parse_result(obj: dict[str, Any]) -> Result | None:
+    """A ``result`` record of a stream (one parsed JSON line), or None for any other line."""
+    return _result(obj) if obj.get("type") == "result" else None
 
 
 _TAIL_CHUNK = 64 * 1024

@@ -45,6 +45,7 @@ from src import (
     retention,
     watchdog,
 )
+from src.activity import ActivityBook
 from src.classify import Outcome
 from src.config import Settings
 from src.database import after_commit, get_db, write_tx
@@ -108,6 +109,14 @@ class TaskEngine:
         self._registry_sig = registry_signature(settings)  # of the files the registry came from
         self.runstore = runstore
         self.redactor = redactor
+        self.activity = ActivityBook()
+        # Summary runs hold task slots (src/summaries.py); one generation per task at a time.
+        self.summaries_running = 0
+        self.summary_jobs: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self.summary_failed_at: dict[str, float] = {}  # a failed summary's cool-down start
+        # Held from a free-slot count to the claim of that slot (scheduler, summaries), so two
+        # deciders never claim the same last slot.
+        self.slot_lock = asyncio.Lock()
         self.notifier = notifier
         self._wake = asyncio.Event()
         self._scheduler: asyncio.Task[None] | None = None
@@ -288,16 +297,25 @@ class TaskEngine:
             with suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), SCHEDULE_TICK_S)
 
-    async def _schedule_once(self) -> None:
-        db = get_db()
-        # A slot is held while the task's latest attempt is open (a cancelled task whose
-        # process is still dying keeps its slot until the waiter closes the attempt row).
-        async with db.execute(
+    async def free_slots(self) -> int:
+        """Task slots not held. A slot is held while a task's latest attempt is open (a
+        cancelled task whose process is still dying keeps its slot until the waiter closes the
+        attempt row), while a task is launching, and while a summary runs."""
+        async with get_db().execute(
             "SELECT COUNT(*) AS n FROM tasks t JOIN attempts a "
             "ON a.task_id = t.id AND a.n = t.attempt WHERE a.ended_at IS NULL"
         ) as cur:
             row = await cur.fetchone()
-        free = self.settings.max_concurrent_tasks - len(self._launching) - (row["n"] if row else 0)
+        held = len(self._launching) + (row["n"] if row else 0) + self.summaries_running
+        return self.settings.max_concurrent_tasks - held
+
+    async def _schedule_once(self) -> None:
+        async with self.slot_lock:
+            await self._claim_slots()
+
+    async def _claim_slots(self) -> None:
+        db = get_db()
+        free = await self.free_slots()
         if free <= 0:
             return
         async with db.execute(
@@ -602,7 +620,13 @@ class TaskEngine:
 
     # Defined last: inside the class body the name `list` shadows the builtin.
     async def list(
-        self, status: str | None, agent: str | None, limit: int, cursor: str | None
+        self,
+        status: str | None,
+        agent: str | None,
+        limit: int,
+        cursor: str | None,
+        **filters: Any,
     ) -> dict[str, Any]:
+        """``filters``: ``project``, ``kind``, ``since``, ``until`` (``engine_read.list_tasks``)."""
         await self.refresh_agents()
-        return await engine_read.list_tasks(self, status, agent, limit, cursor)
+        return await engine_read.list_tasks(self, status, agent, limit, cursor, **filters)

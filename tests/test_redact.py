@@ -928,3 +928,16 @@ def test_placeholder_exemption_is_a_fixed_word_list(tmp_path: Path) -> None:
     for word in (*words, "path", "url", "host", "port"):
         for text in (f"token: <{word}>", f'password="<{word}>"', f"TOKEN=<{word}>, next"):
             assert redactor.redact_line(text) == text
+
+
+def test_redactor_masks_report_tokens(tmp_path: Path) -> None:
+    settings = Settings(
+        home=tmp_path,
+        auth_token="adm-secret-1",
+        reports_token="rep-secret-2",
+        content_token="con-secret-3",
+    )
+    out = json.dumps(
+        Redactor.from_settings(settings).redact_json({"x": "rep-secret-2 con-secret-3"})
+    )
+    assert "rep-secret-2" not in out and "con-secret-3" not in out

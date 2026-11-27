@@ -9,10 +9,12 @@ Tokens come from ``modelUsage`` (every model, subagents included). Without it th
 ``usage`` is used. That figure is per run, not cumulative, so it is taken as is.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import aiosqlite
 
+from src.recovery import KILL_REASONS
 from src.stream import Result
 
 
@@ -91,3 +93,49 @@ async def task_usage(db: aiosqlite.Connection, task_id: str, n: int, own: Usage)
     return Usage(
         cost_usd=_plus(others.cost_usd, own.cost_usd), tokens=_plus(others.tokens, own.tokens)
     )
+
+
+# An attempt whose process never started (``engine_recovery.spawn_failed``): nothing was spent.
+SPAWN_FAILED = "spawn_failed"
+
+
+def uncounted_condition(alias: str) -> tuple[str, list[str]]:
+    """SQL (and its parameters) true for an ended attempt ``alias`` whose spend is not (fully)
+    in the figures: cut short (no result record, or killed) and never followed by an attempt
+    of the same session that has a result (a resumed session's total brings the earlier spend
+    back in). A failed spawn spent nothing and is never uncounted."""
+    kills = sorted(KILL_REASONS)
+    sql = (
+        f"({alias}.ended_at IS NOT NULL AND coalesce({alias}.reason, '') != '{SPAWN_FAILED}' "
+        f"AND ({alias}.cost_usd IS NULL "
+        f"OR coalesce({alias}.reason, '') IN ({','.join('?' * len(kills))})) "
+        f"AND NOT EXISTS (SELECT 1 FROM attempts later WHERE later.task_id = {alias}.task_id "
+        f"AND later.n > {alias}.n AND later.session_id = {alias}.session_id "
+        "AND later.cost_usd IS NOT NULL))"
+    )
+    return sql, kills
+
+
+async def uncounted_attempt_keys(
+    db: aiosqlite.Connection, task_ids: Sequence[str]
+) -> set[tuple[str, int]]:
+    """``(task_id, n)`` of the attempts ``uncounted_condition`` holds for."""
+    if not task_ids:
+        return set()
+    ids = list(task_ids)
+    condition, params = uncounted_condition("a")
+    async with db.execute(
+        f"SELECT a.task_id, a.n FROM attempts a "
+        f"WHERE a.task_id IN ({','.join('?' * len(ids))}) AND {condition}",
+        [*ids, *params],
+    ) as cur:
+        return {(r["task_id"], int(r["n"])) for r in await cur.fetchall()}
+
+
+async def uncounted_attempts(db: aiosqlite.Connection, task_ids: Sequence[str]) -> dict[str, int]:
+    """Per task, how many of its attempts ``uncounted_attempt_keys`` names; tasks with none are
+    absent."""
+    counts: dict[str, int] = {}
+    for task_id, _ in await uncounted_attempt_keys(db, task_ids):
+        counts[task_id] = counts.get(task_id, 0) + 1
+    return counts

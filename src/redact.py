@@ -318,7 +318,7 @@ class Redactor:
         for path in settings.redact_env_files:
             values.extend(_parse_env_file(path, only_secret_keys=False, warn=True))
         values.extend(childenv.secret_values(settings.child_env_file))  # credentials, all of it
-        values.append(settings.auth_token)
+        values.extend((settings.auth_token, settings.reports_token, settings.content_token))
         return cls(values)
 
     def add_values(self, values: Iterable[str]) -> None:

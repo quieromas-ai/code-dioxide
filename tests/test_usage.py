@@ -7,7 +7,15 @@ import pytest
 
 from src.database import close_db, get_db, init_db, write_tx
 from src.stream import Result
-from src.usage import Usage, attempt_usage, session_usage_before, task_usage
+from src.usage import (
+    Usage,
+    attempt_usage,
+    session_usage_before,
+    task_usage,
+    uncounted_attempts,
+)
+from tests.helpers import Env
+from tests.reports_fixture import insert_attempt, insert_task
 
 NOTHING = Usage(cost_usd=None, tokens=None)
 SESSION = "e05e6ac6-0000-4000-8000-000000000000"
@@ -117,3 +125,37 @@ def test_zero_spend_resume_within_float_noise_is_not_a_reset() -> None:
         counted = Usage(cost_usd=(counted.cost_usd or 0.0) + share.cost_usd, tokens=None)
     idle = attempt_usage(result(3.7479, None), counted)
     assert idle.cost_usd == pytest.approx(0.0, abs=1e-9)
+
+
+async def _plant_completeness_cases() -> None:
+    for task_id in "ABCDE":
+        await insert_task(task_id)
+    await insert_attempt("A", 1, ended_at=1.0, cost_usd=None)  # resumed with a result: counted
+    await insert_attempt("A", 2, ended_at=2.0, cost_usd=1.0)
+    await insert_attempt("B", 1, ended_at=1.0, cost_usd=0.5, reason="stall")  # killed, last
+    await insert_attempt("C", 1, session_id="s1", ended_at=1.0, cost_usd=None)  # fresh after
+    await insert_attempt("C", 2, session_id="s2", ended_at=2.0, cost_usd=1.0)
+    await insert_attempt("D", 1, ended_at=None, cost_usd=None)  # still running
+    await insert_attempt("E", 1, ended_at=1.0, cost_usd=1.0, reason="clean_exit")
+
+
+async def test_uncounted_attempt_rules(db: None) -> None:
+    await _plant_completeness_cases()
+    assert await uncounted_attempts(get_db(), list("ABCDE")) == {"B": 1, "C": 1}
+    assert await uncounted_attempts(get_db(), []) == {}
+
+
+async def test_status_and_list_carry_completeness(env: Env) -> None:
+    await _plant_completeness_cases()
+    for task_id, uncounted in (("B", 1), ("E", 0)):
+        status = await env.engine.status(task_id)
+        assert (status["uncounted_attempts"], status["cost_complete"]) == (uncounted, not uncounted)
+    rows = {r["task_id"]: r for r in (await env.engine.list(None, None, 20, None))["tasks"]}
+    assert (rows["B"]["uncounted_attempts"], rows["B"]["cost_complete"]) == (1, False)
+    assert (rows["E"]["uncounted_attempts"], rows["E"]["cost_complete"]) == (0, True)
+
+
+async def test_failed_spawn_is_not_uncounted(db: None) -> None:
+    await insert_task("F", status="failed")
+    await insert_attempt("F", 1, ended_at=1.0, cost_usd=None, reason="spawn_failed")
+    assert await uncounted_attempts(get_db(), ["F"]) == {}

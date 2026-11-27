@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: PositiveInt = 8500
     auth_token: str = Field(default="", repr=False)
+    # Read-only reporting scopes (optional): numbers only, and numbers plus redacted text.
+    reports_token: str = Field(default="", repr=False)
+    content_token: str = Field(default="", repr=False)
     auth_disabled: bool = False
     trust_loopback: bool = False
     allowed_hosts: list[str] = Field(default_factory=list)
@@ -116,6 +119,11 @@ class Settings(BaseSettings):
     extra_path: list[str] = Field(default_factory=list)
 
     max_concurrent_tasks: PositiveInt = 3
+    # On-request task summaries (GET /api/v1/tasks/{id}/summary): one `claude -p` run each,
+    # in a task slot; a summary younger than the interval is served from the cache.
+    summaries: bool = False
+    summary_model: str = "haiku"
+    summary_min_interval_s: NonNegFloat = 300.0
     task_queue_size: NonNegInt = 20
 
     dedupe_window_s: NonNegInt = 900
@@ -307,3 +315,6 @@ class Settings(BaseSettings):
     def validate_security(self) -> None:
         if self.auth_token == "" and not self.auth_disabled:
             raise ValueError("auth_token is required unless auth_disabled is true")
+        tokens = [t for t in (self.auth_token, self.reports_token, self.content_token) if t]
+        if len(tokens) != len(set(tokens)):
+            raise ValueError("auth_token, reports_token and content_token must be distinct")

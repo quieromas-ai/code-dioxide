@@ -4,7 +4,6 @@ Handlers stay thin: they call the same `ToolProvider` methods as the MCP tools.
 """
 
 import asyncio
-import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
@@ -15,7 +14,11 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from src import bundle
+from src.auth import Access, access_of
 from src.mcp_server import ToolProvider
+from src.reports.query import QueryError, parse_filters
+from src.reports.views import reports_list, reports_status
+from src.sse import KEEPALIVE, sse
 
 KEEPALIVE_S = 15.0
 POLL_S = 1.0
@@ -26,13 +29,6 @@ _UNAVAILABLE = {"error": "engine not started", "status": "unavailable"}
 
 class AnswerBody(BaseModel):
     answer: str
-
-
-def _sse(entry: dict[str, Any], event: str | None = None, event_id: str | None = None) -> str:
-    head = f"event: {event}\n" if event else ""
-    if event_id:
-        head += f"id: {event_id}\n"
-    return f"{head}data: {json.dumps(entry, ensure_ascii=False)}\n\n"
 
 
 async def _file_chunks(path: Path) -> AsyncGenerator[bytes]:
@@ -76,34 +72,54 @@ def build_router(
             return JSONResponse(result, status_code=503)
         return JSONResponse(result, status_code=400 if "error" in result else 200)
 
-    @router.get("/health")
+    @router.get("/health", tags=["service"])
     async def health() -> dict[str, Any]:
         return {"status": "ok", **await provider.task_counts()}
 
-    @router.get("/api/v1/tasks")
+    @router.get("/api/v1/tasks", tags=["entities"], summary="tasks, newest first")
     async def list_tasks(
+        request: Request,
         status: str | None = None,
         agent: str | None = None,
         limit: int = 20,
         cursor: str | None = None,
+        project: str | None = None,
+        kind: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> Response:
-        return payload(await provider.list_tasks(status, agent, limit, cursor))
+        given = {"project": project, "kind": kind, "since": since, "until": until}
+        try:
+            filters = parse_filters(
+                {k: v for k, v in given.items() if v is not None}, now=time.time(), windowed=False
+            )
+        except QueryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        result = await provider.list_tasks(status, agent, limit, cursor, filters)
+        if access_of(request.scope) is Access.reports:
+            result = reports_list(result)
+        return payload(result)
 
-    @router.get("/api/v1/tasks/{task_id}")
-    async def get_task(task_id: str) -> Response:
-        return await missing(task_id) or JSONResponse(await provider.check_task_status(task_id))
+    @router.get("/api/v1/tasks/{task_id}", tags=["entities"], summary="one task")
+    async def get_task(request: Request, task_id: str) -> Response:
+        if (gone := await missing(task_id)) is not None:
+            return gone
+        result = await provider.check_task_status(task_id)
+        if access_of(request.scope) is Access.reports:
+            result = reports_status(result)
+        return JSONResponse(result)
 
-    @router.post("/api/v1/tasks/{task_id}/cancel")
+    @router.post("/api/v1/tasks/{task_id}/cancel", tags=["admin"])
     async def cancel_task(task_id: str) -> Response:
         return await missing(task_id) or JSONResponse(await provider.cancel_task(task_id))
 
-    @router.post("/api/v1/tasks/{task_id}/answer")
+    @router.post("/api/v1/tasks/{task_id}/answer", tags=["admin"])
     async def answer_task(task_id: str, body: AnswerBody) -> Response:
         return await missing(task_id) or JSONResponse(
             await provider.answer_task(task_id, body.answer, source="rest")
         )
 
-    @router.get("/api/v1/tasks/{task_id}/logs")
+    @router.get("/api/v1/tasks/{task_id}/logs", tags=["admin"])
     async def task_logs(
         task_id: str,
         source: str | None = None,
@@ -115,11 +131,11 @@ def build_router(
             return gone
         return payload(await provider.get_task_logs(task_id, source, cursor, limit, full))
 
-    @router.get("/api/v1/tasks/{task_id}/debug")
+    @router.get("/api/v1/tasks/{task_id}/debug", tags=["admin"])
     async def task_debug(task_id: str) -> Response:
         return await missing(task_id) or JSONResponse(await provider.get_task_debug(task_id))
 
-    @router.get("/api/v1/tasks/{task_id}/stream")
+    @router.get("/api/v1/tasks/{task_id}/stream", tags=["admin"])
     async def task_stream(
         request: Request, task_id: str, source: str | None = None, cursor: str | None = None
     ) -> Response:
@@ -140,14 +156,14 @@ def build_router(
             while not await request.is_disconnected():
                 page = await follower.page(source, position, STREAM_LIMIT)
                 if "error" in page:
-                    yield _sse(page, "error")
+                    yield sse(page, "error")
                     return
                 position = page["next_cursor"]
                 last = len(page["entries"]) - 1
                 for n, entry in enumerate(page["entries"]):
-                    yield _sse(entry, event_id=position if n == last else None)
+                    yield sse(entry, event_id=position if n == last else None)
                 if page["done"]:
-                    yield _sse({"next_cursor": position}, "done")
+                    yield sse({"next_cursor": position}, "done")
                     return
                 if page["entries"]:
                     last_sent = time.monotonic()
@@ -155,12 +171,12 @@ def build_router(
                 await asyncio.sleep(poll_s)
                 if time.monotonic() - last_sent >= keepalive_s:
                     last_sent = time.monotonic()
-                    yield ": keep-alive\n\n"
+                    yield KEEPALIVE
 
         headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
         return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
 
-    @router.get("/api/v1/tasks/{task_id}/bundle.tar.gz")
+    @router.get("/api/v1/tasks/{task_id}/bundle.tar.gz", tags=["admin"])
     async def task_bundle(task_id: str) -> Response:
         if (gone := await missing(task_id)) is not None:
             return gone
@@ -175,7 +191,7 @@ def build_router(
             headers={"Content-Disposition": f'attachment; filename="{task_id}.tar.gz"'},
         )
 
-    @router.get("/api/v1/server/logs")
+    @router.get("/api/v1/server/logs", tags=["admin"])
     async def server_logs(
         cursor: str | None = None, limit: int = 200, full: bool = False
     ) -> Response:

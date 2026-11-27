@@ -83,7 +83,47 @@ CREATE TABLE IF NOT EXISTS steps (
     finished_at REAL,
     attempt INTEGER,  -- the attempt that last updated the row
     prev_started_count INTEGER NOT NULL DEFAULT 0,  -- started_count left by earlier attempts
+    -- the stage's own numbers from its progress entry (never from a cached replay);
+    -- stage_tokens is the stage's context size, not billed tokens
+    agent_type TEXT,
+    model TEXT,
+    stage_tokens INTEGER,
+    tool_calls INTEGER,
+    last_tool TEXT,
+    duration_s REAL,
+    last_progress_at REAL,
     PRIMARY KEY (task_id, label)
+);
+
+-- each attempt's share per model (src/model_usage.py); none when the split is not knowable
+CREATE TABLE IF NOT EXISTS attempt_models (
+    task_id TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    cost_usd REAL,
+    PRIMARY KEY (task_id, n, model)
+);
+
+-- the latest summary per task (src/summaries.py), and every summary run's spend (overhead)
+CREATE TABLE IF NOT EXISTS summaries (
+    task_id TEXT PRIMARY KEY,
+    generated_at REAL NOT NULL,
+    basis_at REAL NOT NULL,
+    text TEXT NOT NULL,
+    cost_usd REAL,
+    tokens INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS summary_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT,
+    at REAL NOT NULL,
+    cost_usd REAL,
+    tokens INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -110,10 +150,19 @@ CREATE INDEX IF NOT EXISTS idx_tasks_fingerprint_status ON tasks (fingerprint, s
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at_id ON tasks (created_at, id);
 CREATE INDEX IF NOT EXISTS idx_events_task_id ON events (task_id);
+CREATE INDEX IF NOT EXISTS idx_events_task_type_at ON events (task_id, type, at);
+CREATE INDEX IF NOT EXISTS idx_events_type_at ON events (type, at);
+CREATE INDEX IF NOT EXISTS idx_attempts_ended_at ON attempts (ended_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_completed_at ON tasks (completed_at);
 """
 
 # Bump on every schema change and migrate in `_check_version`.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 9
+STAGE_COLUMNS = (
+    ("agent_type", "TEXT"), ("model", "TEXT"), ("stage_tokens", "INTEGER"),
+    ("tool_calls", "INTEGER"), ("last_tool", "TEXT"), ("duration_s", "REAL"),
+    ("last_progress_at", "REAL"),
+)  # fmt: skip
 # Removed in v5: never-used notification fields (dropped from older DBs on open).
 _V5_DROPPED_TASK_COLUMNS = ("slack_channel", "slack_ts")
 _V5_DROPPED_TABLE = "slack_seen"
@@ -216,6 +265,11 @@ async def _check_version(conn: aiosqlite.Connection) -> None:
         await conn.execute(f"DROP TABLE IF EXISTS {_V5_DROPPED_TABLE}")
     if 1 <= version < 6:  # v6: tasks.model_fallback_applied (rate-limit model fallback)
         await _add_column(conn, "tasks", "model_fallback_applied", "INTEGER NOT NULL DEFAULT 0")
+    if 1 <= version < 7:  # v7: steps stage numbers (from workflow progress)
+        for column, decl in STAGE_COLUMNS:
+            await _add_column(conn, "steps", column, decl)
+    # v8: attempt_models; v9: summaries, summary_runs (created by SCHEMA's CREATE TABLE IF NOT
+    # EXISTS)
     if version < SCHEMA_VERSION:
         await conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
