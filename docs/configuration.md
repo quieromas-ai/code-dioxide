@@ -19,6 +19,10 @@ after a change.
 | `DIOXIDE_CONTENT_TOKEN` | unset | Read-only token for numbers and redacted text (see [Reporting API](reporting-api.md)). Must differ from the other tokens. |
 | `DIOXIDE_TRUST_LOOPBACK` | `false` | Accept loopback requests without a token (see [Security model](security-model.md)). |
 | `DIOXIDE_ALLOWED_HOSTS` | `[]` | Extra `Host` values the MCP endpoint accepts (needed behind a proxy or tunnel). |
+| `DIOXIDE_TUNNEL_HOST` / `DIOXIDE_TUNNEL_PORT` | `127.0.0.1` / `0` (off) | Optional (off by default) second listener for Cloudflare Tunnel traffic, one proposed way to reach the server from outside (see [Security model](security-model.md#cloudflare-tunnel--access)). Needs the three `DIOXIDE_CF_ACCESS_*` settings and `DIOXIDE_ALLOWED_HOSTS`; must differ from `DIOXIDE_PORT`; refused with `auth_disabled`. |
+| `DIOXIDE_CF_ACCESS_TEAM_DOMAIN` | unset | `https://<team>.cloudflareaccess.com`. |
+| `DIOXIDE_CF_ACCESS_AUD` | unset | The Access application's AUD tag. |
+| `DIOXIDE_CF_ACCESS_COMMON_NAME` | unset | The Access service token's client id. |
 | `DIOXIDE_CLAUDE_BIN` | `claude` | The Claude Code binary. |
 | `DIOXIDE_PARENT_MODEL` | unset | `--model` for the lifecycle parent session. |
 | `DIOXIDE_PARENT_EFFORT` | unset | `--effort` for the lifecycle parent: `low`, `medium`, `high`, `xhigh`, `max`. |

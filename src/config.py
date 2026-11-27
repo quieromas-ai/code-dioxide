@@ -12,6 +12,8 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from src.cf_access import CfAccessPolicy
+
 ENV_PREFIX = "DIOXIDE_"
 DEFAULT_HOME = Path("~/.code-dioxide")
 CHILD_ENV_NAME = "child.env"  # credentials for the sessions dioxide starts (src.childenv)
@@ -106,6 +108,13 @@ class Settings(BaseSettings):
     auth_disabled: bool = False
     trust_loopback: bool = False
     allowed_hosts: list[str] = Field(default_factory=list)
+    # Optional second listener for Cloudflare Tunnel traffic (0: off). Every request on it needs
+    # a valid Cloudflare Access application token and the bearer token (src.auth).
+    tunnel_host: str = "127.0.0.1"
+    tunnel_port: Annotated[int, Field(ge=0, le=65535)] = 0
+    cf_access_team_domain: str = ""  # https://<team>.cloudflareaccess.com
+    cf_access_aud: str = ""  # the Access application's AUD tag
+    cf_access_common_name: str = ""  # the service token's client id
 
     claude_bin: str = "claude"
     parent_model: str | None = None
@@ -258,6 +267,34 @@ class Settings(BaseSettings):
     def _expand_user_list(cls, value: list[Path]) -> list[Path]:
         return [path.expanduser() for path in value]
 
+    @field_validator("cf_access_team_domain", mode="after")
+    @classmethod
+    def _https_team_domain(cls, value: str) -> str:
+        if value and not value.startswith("https://"):
+            raise ValueError(
+                f"cf_access_team_domain must be https://<team>.cloudflareaccess.com (got {value!r})"
+            )
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def _complete_tunnel(self) -> Self:
+        cf_access = (self.cf_access_team_domain, self.cf_access_aud, self.cf_access_common_name)
+        if (self.tunnel_port or any(cf_access)) and not all(cf_access):
+            raise ValueError(
+                "tunnel_port and Cloudflare Access need all of cf_access_team_domain, "
+                "cf_access_aud and cf_access_common_name"
+            )
+        if not self.tunnel_port:
+            return self
+        if self.tunnel_port == self.port:
+            raise ValueError(f"tunnel_port must differ from port ({self.port})")
+        if not self.allowed_hosts:
+            raise ValueError(
+                "tunnel_port requires allowed_hosts to name the tunnel host name (the MCP "
+                "endpoint's DNS-rebinding check rejects any other Host)"
+            )
+        return self
+
     @model_validator(mode="after")
     def _default_mcp_config(self) -> Self:
         if self.mcp_config_path is None:
@@ -312,9 +349,21 @@ class Settings(BaseSettings):
     def lock_path(self) -> Path:
         return self.data_dir / ".lock"
 
+    def cf_access_policy(self) -> CfAccessPolicy | None:
+        """The Access token policy; None when Cloudflare Access is not configured."""
+        if not self.cf_access_team_domain:
+            return None
+        return CfAccessPolicy(
+            team_domain=self.cf_access_team_domain,
+            audience=self.cf_access_aud,
+            common_name=self.cf_access_common_name,
+        )
+
     def validate_security(self) -> None:
         if self.auth_token == "" and not self.auth_disabled:
             raise ValueError("auth_token is required unless auth_disabled is true")
+        if self.tunnel_port and self.auth_disabled:
+            raise ValueError("tunnel_port requires the bearer token: auth_disabled must be false")
         tokens = [t for t in (self.auth_token, self.reports_token, self.content_token) if t]
         if len(tokens) != len(set(tokens)):
             raise ValueError("auth_token, reports_token and content_token must be distinct")

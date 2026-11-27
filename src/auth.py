@@ -1,11 +1,16 @@
 """Bearer-token access control for every route, as pure ASGI (the MCP endpoint streams).
 
-Order: `auth_disabled` -> admin; admin token -> admin; content token -> content; reports token
--> reports; `trust_loopback` and a loopback peer without forwarding headers -> admin; anything
-else -> 401. The peer address comes from the ASGI connection (`scope["client"]`), never from
-headers. A reports or content caller reaches only the routes its allowlist names (method and
-the whole decoded path); anything else is 403, a websocket is closed. The scope is left in
-`scope["state"]["access"]` for handlers that shape their response by it.
+Cloudflare requests first: a request on the tunnel listener needs a valid Cloudflare Access
+application token (src.cf_access), else 403 (always 403 without a configured verifier). With a
+verifier configured, so does a request carrying Cloudflare headers (`Cf-Connecting-IP`,
+`Cf-Access-Jwt-Assertion`) on any listener. Without one, those headers only make the caller
+non-local. Then: `auth_disabled` -> admin; admin token -> admin; content token -> content;
+reports token -> reports; `trust_loopback` and a loopback peer without forwarding or
+Cloudflare headers, not on the tunnel listener -> admin; anything else -> 401. The peer address
+and the listener port come from the ASGI connection (`scope["client"]`, `scope["server"]`),
+never from headers. A reports or content caller reaches only the routes its allowlist names
+(method and the whole decoded path); anything else is 403, a websocket is closed. The scope is
+left in `scope["state"]["access"]` for handlers that shape their response by it.
 """
 
 import hmac
@@ -13,13 +18,22 @@ import ipaddress
 import re
 from enum import StrEnum
 
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketClose
 
+from src.cf_access import (
+    CF_ACCESS_JWT_HEADER,
+    CF_CONNECTING_IP_HEADER,
+    CfAccessError,
+    CfAccessVerifier,
+)
+
 # Set by reverse proxies: the loopback peer is then a proxy, not a local client.
 _FORWARDING_PREFIX = b"x-forwarded-"
 _FORWARDING_HEADERS = frozenset({b"forwarded", b"x-real-ip"})
+_CLOUDFLARE_HEADERS = frozenset({CF_ACCESS_JWT_HEADER, CF_CONNECTING_IP_HEADER})
 
 
 class Access(StrEnum):
@@ -99,6 +113,13 @@ def _is_forwarded(scope: Scope) -> bool:
     )
 
 
+def _header(scope: Scope, wanted: bytes) -> str:
+    for name, value in scope["headers"]:
+        if name == wanted:
+            return str(value.decode("latin-1"))
+    return ""
+
+
 def _bearer_token(scope: Scope) -> str | None:
     for name, value in scope["headers"]:
         if name == b"authorization":
@@ -117,6 +138,8 @@ class BearerAuthMiddleware:
         trust_loopback: bool,
         reports_token: str = "",
         content_token: str = "",
+        tunnel_port: int = 0,
+        cf_verifier: CfAccessVerifier | None = None,
     ) -> None:
         self.app = app
         self._tokens = [
@@ -130,6 +153,8 @@ class BearerAuthMiddleware:
         ]
         self._auth_disabled = auth_disabled
         self._trust_loopback = trust_loopback
+        self._tunnel_port = tunnel_port
+        self._cf_verifier = cf_verifier
 
     def _token_access(self, scope: Scope) -> Access | None:
         presented = _bearer_token(scope)
@@ -141,12 +166,34 @@ class BearerAuthMiddleware:
                 found = access
         return found
 
-    def _access(self, scope: Scope) -> Access | None:
+    def _on_tunnel(self, scope: Scope) -> bool:
+        if not self._tunnel_port:
+            return False
+        server = scope.get("server")
+        # An unknown listener counts as the tunnel one: the stricter checks apply.
+        return server is None or server[1] == self._tunnel_port
+
+    async def _cf_access_verified(self, scope: Scope) -> bool:
+        if self._cf_verifier is None:
+            return False  # Cloudflare traffic without verification configured: fail closed
+        token = _header(scope, CF_ACCESS_JWT_HEADER)
+        try:
+            await run_in_threadpool(self._cf_verifier.verify, token)  # may fetch signing keys
+        except CfAccessError:
+            return False
+        return True
+
+    def _access(self, scope: Scope, from_cloudflare: bool) -> Access | None:
         if self._auth_disabled:
             return Access.admin
         if (access := self._token_access(scope)) is not None:
             return access
-        if self._trust_loopback and _is_loopback(scope) and not _is_forwarded(scope):
+        if (
+            self._trust_loopback
+            and not from_cloudflare
+            and _is_loopback(scope)
+            and not _is_forwarded(scope)
+        ):
             return Access.admin
         return None
 
@@ -154,18 +201,29 @@ class BearerAuthMiddleware:
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-        access = self._access(scope)
+        on_tunnel = self._on_tunnel(scope)
+        cloudflare_headers = any(name in _CLOUDFLARE_HEADERS for name, _ in scope["headers"])
+        must_verify = on_tunnel or (cloudflare_headers and self._cf_verifier is not None)
+        if must_verify and not await self._cf_access_verified(scope):
+            await _refuse(scope, receive, send, unauthenticated=False)
+            return
+        from_cloudflare = on_tunnel or cloudflare_headers
+        access = self._access(scope, from_cloudflare)
         if access is not None and _route_allowed(access, scope):
             scope.setdefault("state", {})["access"] = access
             await self.app(scope, receive, send)
             return
-        if scope["type"] == "websocket":
-            await WebSocketClose(code=1008)(scope, receive, send)
-            return
-        if access is None:
-            response = JSONResponse(
-                {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
-            )
-        else:
-            response = JSONResponse({"error": "forbidden"}, status_code=403)
-        await response(scope, receive, send)
+        await _refuse(scope, receive, send, unauthenticated=access is None)
+
+
+async def _refuse(scope: Scope, receive: Receive, send: Send, *, unauthenticated: bool) -> None:
+    if scope["type"] == "websocket":
+        await WebSocketClose(code=1008)(scope, receive, send)
+        return
+    if unauthenticated:
+        response = JSONResponse(
+            {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
+        )
+    else:
+        response = JSONResponse({"error": "forbidden"}, status_code=403)
+    await response(scope, receive, send)

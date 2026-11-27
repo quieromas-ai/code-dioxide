@@ -1,5 +1,7 @@
 import os
+import socket
 import sqlite3
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,9 +11,11 @@ import uvicorn
 from fastapi import FastAPI
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from uvicorn.config import STARTUP_FAILURE
 
 from src import bundle, childenv, procs, serverlog
 from src.auth import BearerAuthMiddleware
+from src.cf_access import CfAccessVerifier
 from src.childenv import ChildEnvError
 from src.config import AlreadyRunning, Settings, acquire_home_lock
 from src.database import close_db, init_db
@@ -88,6 +92,11 @@ def _transport_security(settings: Settings) -> TransportSecuritySettings | None:
         allowed_hosts=[*_LOOPBACK_HOSTS, *settings.allowed_hosts],
         allowed_origins=[*_LOOPBACK_ORIGINS, *origins],
     )
+
+
+def _cf_verifier(settings: Settings) -> CfAccessVerifier | None:
+    policy = settings.cf_access_policy()
+    return CfAccessVerifier(policy) if policy is not None else None
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -187,6 +196,8 @@ def create_app(settings: Settings) -> FastAPI:
         content_token=settings.content_token,
         auth_disabled=settings.auth_disabled,
         trust_loopback=settings.trust_loopback,
+        tunnel_port=settings.tunnel_port,
+        cf_verifier=_cf_verifier(settings),
     )
     app.add_middleware(_StartupFailureMessage, failures=failures)
     return app
@@ -214,11 +225,43 @@ def server_options(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _bind_listener(host: str, port: int) -> socket.socket:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+    except OSError:
+        sock.close()
+        raise
+    sock.set_inheritable(True)
+    return sock
+
+
 def serve(settings: Settings) -> None:
     # Every file the process creates (db, -wal/-shm, logs, run output) is private; spawned
     # children get the umask the server started with back.
     procs.set_child_umask(os.umask(0o077))
-    uvicorn.run(create_app(settings), **server_options(settings))
+    app = create_app(settings)
+    if not settings.tunnel_port:
+        uvicorn.run(app, **server_options(settings))
+        return
+    # Two listeners, one app: the main one and the Cloudflare Tunnel one (src.auth tells them
+    # apart by the connection's local port).
+    sockets: list[socket.socket] = []
+    try:
+        for host, port in (
+            (settings.host, settings.port),
+            (settings.tunnel_host, settings.tunnel_port),
+        ):
+            sockets.append(_bind_listener(host, port))
+        server = uvicorn.Server(uvicorn.Config(app, **server_options(settings)))
+        server.run(sockets=sockets)
+    finally:
+        for sock in sockets:
+            sock.close()
+    if not server.started:  # what uvicorn.run does: a failed startup is not a clean exit
+        sys.exit(STARTUP_FAILURE)
 
 
 def run() -> None:
