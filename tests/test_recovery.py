@@ -1293,7 +1293,7 @@ async def test_auth_failure_is_terminal_one_attempt(
     assert status["status"] == "failed"
     assert status["error"] == (
         f"claude is not authenticated for this service: {AUTH_TEXT}. Set credentials in "
-        f"{env.settings.home}/child.env (see README: Credentials) or log in as the service user."
+        f"{env.settings.home}/child.env (see docs/credentials.md) or log in as the service user."
     )
     (auth,) = await event_data(task_id, "auth_failed")
     assert auth == {"n": 1, "message": AUTH_TEXT}

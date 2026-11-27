@@ -67,10 +67,13 @@ async def test_openapi_served_with_family_tags(tmp_path: Path) -> None:
             assert family in paths[path]["get"]["tags"], path
 
 
-def test_readme_routes_exist(tmp_path: Path) -> None:
-    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
-    section = readme.split("## Reporting API", 1)[1].split("\n## ", 1)[0]
-    named = {re.sub(r"\{[^}]+\}", "{x}", p) for p in re.findall(r"`(/api/v1[^`?]*)`", section)}
+def test_docs_routes_exist(tmp_path: Path) -> None:
+    docs = Path(__file__).resolve().parent.parent / "docs"
+    text = "".join(
+        (docs / name).read_text()
+        for name in ("reporting-api.md", "reporting-api-reference.md", "dashboards.md")
+    )
+    named = {re.sub(r"\{[^}]+\}", "{x}", p) for p in re.findall(r"`(/api/v1[^`?]*)`", text)}
     app = create_app(Settings(home=tmp_path, auth_token=TOKEN))
     served = {re.sub(r"\{[^}]+\}", "{x}", p) for p in app.openapi()["paths"]}
     served |= {"/api/v1", "/api/v1/openapi.json"}

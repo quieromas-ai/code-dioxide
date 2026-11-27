@@ -54,7 +54,7 @@ KILL_REREQUEST_MAX_S = 600.0
 _VIOLATION_EVENT = {"parent_violation": "parent_tool_violation"}
 AUTH_FAILED_ERROR = (
     "claude is not authenticated for this service: {message}. Set credentials in {path} "
-    "(see README: Credentials) or log in as the service user."
+    "(see docs/credentials.md) or log in as the service user."
 )
 _log = logging.getLogger(LOGGER_NAME)
 

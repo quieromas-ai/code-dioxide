@@ -49,7 +49,7 @@ ENV_STARTER = """\
 # Written by `dioxide init`; keep it private (mode 0600).
 DIOXIDE_AUTH_TOKEN={token}
 # Credentials for the claude sessions dioxide starts go in child.env next to this file, not
-# here (mode 0600; see README: Credentials): DIOXIDE_* settings never reach the sessions.
+# here (mode 0600; see docs/credentials.md): DIOXIDE_* settings never reach the sessions.
 # DIOXIDE_HOST=127.0.0.1
 # DIOXIDE_PORT=8500
 # The orchestrator (lifecycle parent session) needs a capable model with a large context
