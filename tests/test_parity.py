@@ -105,10 +105,11 @@ async def provider(tmp_path: Path) -> AsyncIterator[ToolProvider]:
 
 async def test_get_agents_lists_registry_with_roles(provider: ToolProvider) -> None:
     listed = await provider.get_agents(role=None, status=None)
-    assert listed["total"] == 5
+    assert listed["total"] == 6
     by_id = {agent["id"]: agent for agent in listed["agents"]}
     assert set(by_id["planner"]) == {"id", "name", "description", "role", "status"}
-    assert by_id["planner"]["role"] == "planner,lifecycle_agent"
+    assert by_id["planner"]["role"] == "planner"
+    assert by_id["coordinator"]["role"] == "lifecycle_agent"
     assert {agent["status"] for agent in listed["agents"]} == {"idle"}
     reviewers = await provider.get_agents(role="reviewer", status=None)
     assert [agent["id"] for agent in reviewers["agents"]] == ["reviewer"]

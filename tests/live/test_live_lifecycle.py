@@ -172,7 +172,7 @@ async def test_live_plan_gate_answer_completes(live_engine: LiveEnv) -> None:
     env = live_engine
     base = _git(env.repo, "rev-parse", "main")
     sub = await env.provider.delegate_task(
-        "planner", DESCRIPTION, {"project_dir": str(env.repo), "plan_gate": True}, 3, 0
+        "coordinator", DESCRIPTION, {"project_dir": str(env.repo), "plan_gate": True}, 3, 0
     )
     assert sub["status"] == "queued", sub
     task_id = sub["task_id"]

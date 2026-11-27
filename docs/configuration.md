@@ -114,12 +114,14 @@ implementer: implementer
 reviewers: [reviewer]          # one or more; run in parallel each review round
 qa: qa
 deployer: deployer             # optional; without it the deploy stage never runs
-lifecycle_agent: planner       # delegating to this agent runs the lifecycle workflow
-aliases: {}                    # e.g. {feature: planner}; an alias must not shadow an agent slug
+lifecycle_agent: coordinator   # delegating to this agent runs the lifecycle workflow
+aliases: {}                    # e.g. {feature: coordinator}; an alias must not shadow an agent slug
 branch_template: "dioxide/{slug}-{id8}"   # must contain {id8}
 ```
 
-Every named agent must exist. Without `roles.yaml`, every task is a single task.
+Every named agent must exist. Give `lifecycle_agent` an agent of its own (the example ships
+`coordinator`): a lifecycle run does not use its prompt or model, so sharing it with a role only
+makes that agent show two roles. Without `roles.yaml`, every task is a single task.
 
 Agent edits (`<home>/agents/*.md`, `roles.yaml`) apply to the next attempt; no restart. Files are
 re-read before a launch when one changed; an invalid edit keeps the last good registry (event

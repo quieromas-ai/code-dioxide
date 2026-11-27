@@ -109,7 +109,7 @@ def test_missing_agents_dir_with_roles_fails(tmp_path: Path) -> None:
 def test_agents_without_roles_load(tmp_path: Path) -> None:
     shutil.copytree(EXAMPLES / "agents", tmp_path / "agents")
     agents, roles = load_registry(settings_for(tmp_path), logging.getLogger("test-boot"))
-    assert len(agents) == 5 and roles is None
+    assert len(agents) == 6 and roles is None
 
 
 async def test_lifespan_fails_fast_on_bad_roles(tmp_path: Path) -> None:
@@ -131,7 +131,14 @@ async def test_lifespan_writes_engine_files(tmp_path: Path) -> None:
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         rendered = json.loads((settings.data_dir / "agents.json").read_text())
-        assert set(rendered) == {"planner", "implementer", "reviewer", "qa", "deployer"}
+        assert set(rendered) == {
+            "planner",
+            "implementer",
+            "reviewer",
+            "qa",
+            "deployer",
+            "coordinator",
+        }
         assert json.loads((settings.data_dir / "mcp.json").read_text()) == {"mcpServers": {}}
         assert json.loads((settings.data_dir / "settings.json").read_text()) == {"model": "x"}
 

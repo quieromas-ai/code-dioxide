@@ -533,7 +533,7 @@ async def test_live_kill_claude_during_implement(live_engine: LiveEnv, evidence:
     _make_suite_slow(env.repo)
     base = _git(env.repo, "rev-parse", "main")
     sub = await env.provider.delegate_task(
-        "planner", DESCRIPTION, {"project_dir": str(env.repo)}, 3, 0
+        "coordinator", DESCRIPTION, {"project_dir": str(env.repo)}, 3, 0
     )
     assert sub["status"] == "queued", sub
     task_id = sub["task_id"]
@@ -573,7 +573,7 @@ async def test_live_kill_claude_after_merge_commit(live_engine: LiveEnv, evidenc
     env = live_engine
     base = _git(env.repo, "rev-parse", "main")
     sub = await env.provider.delegate_task(
-        "planner", DESCRIPTION, {"project_dir": str(env.repo)}, 3, 0
+        "coordinator", DESCRIPTION, {"project_dir": str(env.repo)}, 3, 0
     )
     assert sub["status"] == "queued", sub
     task_id = sub["task_id"]
@@ -757,7 +757,7 @@ async def test_live_restart_server_reattach(
     db = settings.db_path
     base = _git(live_repo, "rev-parse", "main")
     await server.start()
-    request = {"agent": "planner", "description": DESCRIPTION,
+    request = {"agent": "coordinator", "description": DESCRIPTION,
                "input_context": {"project_dir": str(live_repo)}}  # fmt: skip
     sub = await server.tool("delegate_task", **request)
     assert sub["status"] == "queued", sub

@@ -119,7 +119,7 @@ def test_no_frontmatter_raises(tmp_path: Path) -> None:
 
 def test_shipped_example_agents() -> None:
     agents = load_agents(EXAMPLES / "agents")
-    assert set(agents) == {"planner", "implementer", "reviewer", "qa", "deployer"}
+    assert set(agents) == {"planner", "implementer", "reviewer", "qa", "deployer", "coordinator"}
     assert agents["reviewer"].disallowed_tools == ["Edit", "Write"]
     for path in (EXAMPLES / "agents").glob("*.md"):
         assert len(path.read_text().splitlines()) <= 30

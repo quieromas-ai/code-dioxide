@@ -105,7 +105,7 @@ def test_shipped_examples() -> None:
     agents = load_agents(EXAMPLES / "agents")
     roles = load_roles(EXAMPLES / "roles.yaml", agents)
     assert roles.reviewers == ["reviewer"]
-    assert roles.lifecycle_agent == "planner"
+    assert roles.lifecycle_agent == "coordinator"
 
     settings = json.loads((EXAMPLES / "settings.json").read_text())
     assert settings == {

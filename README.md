@@ -88,12 +88,13 @@ The printed command contains the real token. Do not paste it anywhere public.
 Then, from a Claude Code session, delegate work:
 
 ```
-delegate_task(agent="planner",
+delegate_task(agent="coordinator",
               description="Add a --dry-run flag to the export command",
               input_context={"project_dir": "<path to a git repo>"})
 ```
 
-In the example `roles.yaml`, `lifecycle_agent` is `planner`, so this runs the full lifecycle.
+In the example `roles.yaml`, `lifecycle_agent` is `coordinator`, so this runs the full lifecycle;
+delegating to any other agent runs it as a single task.
 Poll with `check_task_status(task_id)`.
 
 The [MCP tools](docs/mcp-tools.md) page lists every tool and how asks are answered.
