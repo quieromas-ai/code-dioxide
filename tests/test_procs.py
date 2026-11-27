@@ -306,7 +306,8 @@ def test_start_time_independent_of_caller_tz(
         monkeypatch.undo()
         time.tzset()
     assert values[0] is not None and len(set(values)) == 1
-    assert abs(values[0] - time.time()) < 3600  # a UTC epoch, not shifted by a zone offset
+    if procs._IS_DARWIN:  # linux: ticks since boot, no zone involved
+        assert abs(values[0] - time.time()) < 3600  # a UTC epoch, not shifted by a zone offset
 
 
 def test_run_timeout_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:

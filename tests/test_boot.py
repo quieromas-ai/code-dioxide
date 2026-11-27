@@ -535,8 +535,12 @@ def ps_failing(calls: list[int] | None = None) -> Iterator[None]:
             calls.append(1)
         return ""
 
+    def failed_stat(pid: int) -> None:  # linux reads /proc instead of running ps
+        if calls is not None:
+            calls.append(1)
+
     procs._run = failed  # type: ignore[assignment]
-    procs._linux_stat = lambda pid: None  # type: ignore[assignment]
+    procs._linux_stat = failed_stat  # type: ignore[assignment]
     procs._read_table = dict  # type: ignore[assignment]
     try:
         yield
