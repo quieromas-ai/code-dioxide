@@ -138,6 +138,11 @@ def create_app(settings: Settings) -> FastAPI:
             redactor = Redactor.from_settings(settings)  # warns here on unreadable redact files
             config = settings.model_dump(mode="json", exclude=SECRET_FIELDS)
             logger.info("config at start", extra={"config": redactor.redact_json(config)})
+            if settings.script_model is None:
+                logger.info(
+                    "script_model is not set: lifecycle setup, merge and interpret stages run on "
+                    "the parent session's model; set script_model for a cheaper one"
+                )
             try:
                 agents, roles = load_registry(settings, logger)
             except (OSError, ValueError) as exc:

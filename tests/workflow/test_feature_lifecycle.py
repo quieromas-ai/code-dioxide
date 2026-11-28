@@ -161,10 +161,14 @@ def test_happy_path_order() -> None:
     assert "are not plan steps" in _call(out, "plan")["prompt"]
 
 
+def _is_script_stage(stage_label: str) -> bool:
+    return stage_label.split("@")[0] in ("setup", "merge") or stage_label.startswith("interpret-")
+
+
 def _assert_script_stages_role_less(out: dict[str, Any]) -> None:
-    """setup/merge calls (any epoch) carry no agentType key; every other call has one."""
+    """setup/merge/interpret calls (any epoch) carry no agentType key; every other call has one."""
     for call in out["calls"]:
-        script_stage = call["label"].split("@")[0] in ("setup", "merge")
+        script_stage = _is_script_stage(call["label"])
         assert ("agentType" in call["optionKeys"]) is not script_stage, call["label"]
         assert (call["agentType"] is None) is script_stage, call["label"]
 
@@ -208,14 +212,14 @@ def _script_stage_runs(**over: Any) -> list[dict[str, Any]]:
 
 
 def test_script_model_only_on_script_stages() -> None:
-    """``script_model`` is passed as ``model`` to setup and merge (every epoch) and to nothing
-    else; without it no call has a model; prompts and every other option stay the same."""
+    """``script_model`` is passed as ``model`` to setup, merge and interpret (every epoch) and to
+    nothing else; without it no call has a model; prompts and every other option stay the same."""
     plain = _script_stage_runs()
     cheap = _script_stage_runs(script_model="haiku")
     for without, with_model in zip(plain, cheap, strict=True):
         assert _labels(without) == _labels(with_model)
         for a, b in zip(without["calls"], with_model["calls"], strict=True):
-            script_stage = a["label"].split("@")[0] in ("setup", "merge")
+            script_stage = _is_script_stage(a["label"])
             assert a["model"] is None and "model" not in a["optionKeys"], a["label"]
             assert b["model"] == ("haiku" if script_stage else None), b["label"]
             assert ("model" in b["optionKeys"]) is script_stage, b["label"]
@@ -407,7 +411,7 @@ def test_plan_gate_then_answer_plan_prompt_identical() -> None:
     assert second["calls"][0] == first["calls"][0]
     assert _labels(second)[:3] == ["plan", "interpret-plan-1", "setup@a1"]
     interp = second["calls"][1]
-    assert interp["agentType"] == "lead"
+    assert interp["agentType"] is None
     assert f"{RUN_DIR}/inputs/answers/1.md" in interp["prompt"]
     assert "keep it small" in _call(second, "implement@a1")["prompt"]
     assert second["return"]["status"] == "completed"
@@ -885,3 +889,117 @@ def test_qa_prompt_names_evidence_dir() -> None:
         assert f"{RUN_DIR}/out/evidence/{label}/ and save every evidence file" in prompt
         assert "(screenshots, logs) there; it is the only place you may write." in prompt
         assert "your evidence with the paths of those files" in prompt
+
+
+# -- interpret: no role, script model, "unclear" asks again ---------------------------------------
+GO2 = {"action": "continue", "extra_rounds": 0, "guidance": ""}
+UNCLEAR = {"action": "unclear", "extra_rounds": 0, "guidance": ""}
+PLAN_ANSWER = [{"k": 1, "label": "plan", "mode": "after"}]
+
+
+def test_interpret_runs_role_less_on_script_model() -> None:
+    responses = _with_epoch(_responses(), 1, skip=("plan",)) | {"interpret-plan-1": [GO2]}
+    out = _run(_args(plan_gate=True, answers=PLAN_ANSWER, script_model="haiku"), responses)
+    call = _call(out, "interpret-plan-1")
+    assert "agentType" not in call["optionKeys"] and call["agentType"] is None
+    assert call["model"] == "haiku"
+    assert call["schema"]["properties"]["action"]["enum"] == [
+        "continue", "amend", "abort", "unclear",
+    ]  # fmt: skip
+    assert "unclear" in call["prompt"] and f"{RUN_DIR}/inputs/answers/1.md" in call["prompt"]
+    assert out["return"]["status"] == "completed"
+
+
+def test_interpret_without_script_model_passes_no_model() -> None:
+    responses = _with_epoch(_responses(), 1, skip=("plan",)) | {"interpret-plan-1": [GO2]}
+    out = _run(_args(plan_gate=True, answers=PLAN_ANSWER), responses)
+    call = _call(out, "interpret-plan-1")
+    assert "model" not in call["optionKeys"] and "agentType" not in call["optionKeys"]
+
+
+def test_interpret_unclear_asks_again_at_the_same_gate() -> None:
+    out = _run(
+        _args(plan_gate=True, answers=PLAN_ANSWER),
+        _responses() | {"interpret-plan-1": [UNCLEAR]},
+    )
+    ret = out["return"]
+    assert (ret["status"], ret["stage"], ret["kind"]) == ("needs_human", "plan", "plan_approval")
+    assert "add the thing" in ret["question"] and "could not be classified" in ret["question"]
+    assert _labels(out) == ["plan", "interpret-plan-1"]
+
+
+def test_interpret_null_is_stage_failed_not_a_reask() -> None:
+    """A missing result is a failed stage (usage limit, auth, crash): the engine must see it."""
+    out = _run(_args(plan_gate=True, answers=PLAN_ANSWER), _responses() | {"interpret-plan-1": []})
+    assert (out["return"]["status"], out["return"]["stage"]) == ("stage_failed", "interpret-plan-1")
+
+
+def test_interpret_reask_replays_k_then_interprets_k_plus_1() -> None:
+    two = [*PLAN_ANSWER, {"k": 2, "label": "plan", "mode": "after"}]
+    responses = _with_epoch(_responses(), 2, skip=("plan",)) | {
+        "interpret-plan-1": [UNCLEAR],
+        "interpret-plan-2": [GO2],
+    }
+    out = _run(_args(plan_gate=True, answers=two), responses)
+    assert _labels(out)[:4] == ["plan", "interpret-plan-1", "interpret-plan-2", "setup@a2"]
+    assert f"{RUN_DIR}/inputs/answers/2.md" in _call(out, "interpret-plan-2")["prompt"]
+    assert out["return"]["status"] == "completed"
+
+
+def test_interpret_unclear_then_amend_replans() -> None:
+    two = [*PLAN_ANSWER, {"k": 2, "label": "plan", "mode": "after"}]
+    amend = {"action": "amend", "extra_rounds": 0, "guidance": "smaller"}
+    responses = _responses() | {
+        "interpret-plan-1": [UNCLEAR],
+        "interpret-plan-2": [amend],
+        "plan@a2": [PLAN],
+    }
+    out = _run(_args(plan_gate=True, answers=two), responses)
+    assert _labels(out) == ["plan", "interpret-plan-1", "interpret-plan-2", "plan@a2"]
+    ret = out["return"]
+    assert (ret["status"], ret["stage"]) == ("needs_human", "plan@a2")
+
+
+def test_interpret_reask_at_a_later_epoch() -> None:
+    """A gate reached after an earlier answer (askLabel ``plan@a1``) re-asks under that label."""
+    amend = {"action": "amend", "extra_rounds": 0, "guidance": "smaller"}
+    answers = [*PLAN_ANSWER, {"k": 2, "label": "plan@a1", "mode": "after"}]
+    responses = _responses() | {
+        "interpret-plan-1": [amend],
+        "plan@a1": [PLAN],
+        "interpret-plan@a1-2": [UNCLEAR],
+    }
+    out = _run(_args(plan_gate=True, answers=answers), responses)
+    assert _labels(out) == ["plan", "interpret-plan-1", "plan@a1", "interpret-plan@a1-2"]
+    assert (out["return"]["status"], out["return"]["stage"]) == ("needs_human", "plan@a1")
+    third = [*answers, {"k": 3, "label": "plan@a1", "mode": "after"}]
+    responses |= {"interpret-plan@a1-3": [GO2]}
+    responses |= _with_epoch(_responses(), 3, skip=("plan",))
+    done = _run(_args(plan_gate=True, answers=third), responses)
+    assert "interpret-plan@a1-3" in _labels(done) and done["return"]["status"] == "completed"
+
+
+def test_interpret_abort_cancels() -> None:
+    abort = {"action": "abort", "extra_rounds": 0, "guidance": ""}
+    out = _run(
+        _args(plan_gate=True, answers=PLAN_ANSWER),
+        _responses() | {"interpret-plan-1": [abort]},
+    )
+    assert (out["return"]["status"], out["return"]["stage"]) == ("cancelled", "interpret-plan-1")
+
+
+def test_interpret_on_every_gate_kind() -> None:
+    """rounds_exhausted and merge_blocked gates take the same path."""
+    review = _run(
+        _args(limits={"review_rounds": 1, "qa_rounds": 3},
+              answers=[{"k": 1, "label": "review-r1", "mode": "after"}]),
+        _responses(**{"review-r1-rev-a": [CHANGES]}) | {"interpret-review-r1-1": [UNCLEAR]},
+    )  # fmt: skip
+    assert (review["return"]["status"], review["return"]["stage"]) == ("needs_human", "review-r1")
+    assert review["return"]["kind"] == "rounds_exhausted"
+    merge = _run(
+        _args(answers=[{"k": 1, "label": "merge", "mode": "after"}]),
+        _responses(merge=[BLOCKED]) | {"interpret-merge-1": [UNCLEAR]},
+    )
+    assert (merge["return"]["status"], merge["return"]["stage"]) == ("needs_human", "merge")
+    assert "agentType" not in _call(merge, "interpret-merge-1")["optionKeys"]

@@ -106,10 +106,11 @@ const MERGE_SCHEMA = {
   required: ["already_merged", "exit_code"],
 };
 
+// "unclear" lets the model decline to classify; the gate then asks the human again.
 const INTERPRET_SCHEMA = {
   type: "object",
   properties: {
-    action: { enum: ["continue", "amend", "abort"] },
+    action: { enum: ["continue", "amend", "abort", "unclear"] },
     extra_rounds: { type: "integer", minimum: 0 },
     guidance: { type: "string" },
   },
@@ -365,17 +366,19 @@ function mergePrompt(approvedHead) {
   );
 }
 
+// Self-contained (question, answer path, every rule), so it runs without a role.
 function interpretPrompt(askLabel, kind, question, k) {
   return prompt(
     `Stage: interpret a human answer. The workflow paused at ${askLabel} (${kind}) and asked:\n` +
       question,
     `Read the answer in ${answerPath(k)} and classify it: continue (go on as planned), amend ` +
-      "(re-plan with the answer's changes) or abort (stop the task). extra_rounds is the number " +
-      "of further review/QA rounds the answer grants (0 if none). guidance holds only what the " +
-      "human added beyond the decision itself, in a few sentences; when the answer adds nothing " +
-      '(for example a bare "approved"), guidance is an empty string. Never restate or ' +
-      "summarise the plan, the question or earlier guidance in it. For amend, guidance carries " +
-      "the changes the human asked for.",
+      "(re-plan with the answer's changes), abort (stop the task) or unclear (the answer does " +
+      "not clearly pick one of continue, amend or abort; never guess abort). extra_rounds is " +
+      "the number of further review/QA rounds the answer grants (0 if none). guidance holds " +
+      "only what the human added beyond the decision itself, in a few sentences; when the " +
+      'answer adds nothing (for example a bare "approved"), guidance is an empty string. ' +
+      "Never restate or summarise the plan, the question or earlier guidance in it. For amend, " +
+      "guidance carries the changes the human asked for.",
   );
 }
 
@@ -447,19 +450,35 @@ function scriptFailed(stageLabel, result, ok) {
   }
 }
 
-// A gate ask: the asking stage stays cached; its answer is interpreted by a new stage.
+const UNCLASSIFIED_NOTE =
+  "\n\n(Your previous answer could not be classified as continue, amend or abort: " +
+  "please answer again.)";
+
+// A gate ask: the asking stage stays cached; its answer is interpreted by a new stage. The
+// interpret stage runs like a script stage (no role, A.script_model when set, else the parent's
+// model): its prompt carries the question, the answer path and every rule, so it needs no
+// role's system prompt. "unclear" asks the human again at the same gate; each answer k gets
+// its own cached interpret-<ask>-<k> (a completed step), so a replay walks the same answers in
+// order. A missing result is a failed stage (a usage limit, auth, a crash), never a re-ask:
+// the engine must see it. Only an explicit "abort" cancels.
 async function gate(base, phaseTitle, kind, question) {
   const askLabel = label(base);
-  const answer = takeAnswer(askLabel, "after");
-  if (!answer) ask(askLabel, kind, question);
-  const interpretLabel = `interpret-${askLabel}-${answer.k}`;
-  const decision = await agent(interpretPrompt(askLabel, kind, question, answer.k), {
-    label: interpretLabel,
-    phase: phaseTitle,
-    agentType: ROLES.planner,
-    schema: INTERPRET_SCHEMA,
-  });
-  if (decision === null) halt("stage_failed", interpretLabel);
+  let note = "";
+  for (;;) {
+    const answer = takeAnswer(askLabel, "after");
+    if (!answer) ask(askLabel, kind, question + note);
+    const interpretLabel = `interpret-${askLabel}-${answer.k}`;
+    const options = { label: interpretLabel, phase: phaseTitle, schema: INTERPRET_SCHEMA };
+    if (SCRIPT_AGENT) options.agentType = SCRIPT_AGENT;
+    if (SCRIPT_MODEL) options.model = SCRIPT_MODEL;
+    const decision = await agent(interpretPrompt(askLabel, kind, question, answer.k), options);
+    if (decision === null) halt("stage_failed", interpretLabel);
+    if (decision.action !== "unclear") return applyDecision(decision, interpretLabel);
+    note = UNCLASSIFIED_NOTE;
+  }
+}
+
+function applyDecision(decision, interpretLabel) {
   if (typeof decision.guidance === "string" && decision.guidance.trim()) {
     guidance.push(decision.guidance);
   }

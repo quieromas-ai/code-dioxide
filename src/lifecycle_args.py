@@ -25,8 +25,9 @@ def build_lifecycle_args(task: Task, settings: Settings, roles: Roles) -> dict[s
     ``plan_gate`` is ``input_context.plan_gate is True``; ``plan_pinned`` is whether
     ``input_context.approved_plan`` was given (the engine writes it to ``inputs/plan.json``).
     ``answers`` starts empty and only ever grows by appending ``{k, label, mode}``.
-    ``script_model`` (the setup and merge stages' model) is present only when the user set it:
-    args frozen before it existed keep running unchanged (those stages on the parent's model).
+    ``script_model`` (the setup, merge and interpret stages' model) is present only when the user
+    set it: args frozen before it existed keep running unchanged (those stages on the parent's
+    model).
     """
     context = task.input_context_dict
     args: dict[str, Any] = {

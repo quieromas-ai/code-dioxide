@@ -26,7 +26,7 @@ after a change.
 | `DIOXIDE_CLAUDE_BIN` | `claude` | The Claude Code binary. |
 | `DIOXIDE_PARENT_MODEL` | unset | `--model` for the lifecycle parent session. |
 | `DIOXIDE_PARENT_EFFORT` | unset | `--effort` for the lifecycle parent: `low`, `medium`, `high`, `xhigh`, `max`. |
-| `DIOXIDE_SCRIPT_MODEL` | unset (parent's model) | Model of the role-less `setup` and `merge` stages. |
+| `DIOXIDE_SCRIPT_MODEL` | unset (parent's model) | Model of the role-less `setup`, `merge` and `interpret-*` stages. Unset: they run on the parent's model, and the server logs a hint at start. |
 | `DIOXIDE_DEFAULT_PROJECT_DIR` | unset | Repo used when `input_context` has no `project_dir`. |
 | `DIOXIDE_CLAUDE_HOME` | `~/.claude` | Where Claude Code keeps sessions (read for live step logs). |
 | `DIOXIDE_EXTRA_PATH` | `[]` | Prepended to every session's `PATH` and to the `service install` `PATH`. |
@@ -65,9 +65,18 @@ orchestrator) out of that list so a stage cannot start new work.
 The lifecycle parent session drives the whole workflow and needs a capable model with a large
 context window. Use Opus or Fable at low to medium effort (`DIOXIDE_PARENT_MODEL`,
 `DIOXIDE_PARENT_EFFORT`). Stage models come from each agent's frontmatter, so stages can use
-cheaper models. The `setup` and `merge` stages only run a fixed script; set
-`DIOXIDE_SCRIPT_MODEL` to a cheap model (for example `haiku`) for them. `parent_model` is
+cheaper models. The `setup` and `merge` stages only run a fixed script, and the
+`interpret-<ask>-<k>` stages only classify a human answer at a gate; set
+`DIOXIDE_SCRIPT_MODEL` to a cheap model (for example `haiku`) for them. Unset, they run on the
+parent's model (often Opus): there is no automatic switch to a cheaper one. `parent_model` is
 never applied to single tasks, so a single task runs on its agent's model.
+
+Gate answers (plan approval, review/QA rounds exhausted, merge blocked) are classified by an
+`interpret-<ask>-<k>` stage as `continue`, `amend`, `abort` or `unclear`. `unclear` asks the
+human again at the same gate, with a note; only `abort` cancels the task; a stage that returns
+no result fails (`stage_failed`), as any stage does. A task runs the workflow copied into its
+run directory at its first launch, so a task paused across an upgrade keeps its earlier gate
+behaviour and resumes from its cache unchanged.
 
 ### Model fallback
 

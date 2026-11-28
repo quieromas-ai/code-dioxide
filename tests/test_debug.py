@@ -1371,3 +1371,14 @@ async def test_debug_shows_attempt_agents(env: Env) -> None:
     view = await debug.task_debug(env.engine, task_id)
     assert view["launch"]["agents_json"] == ran_with
     assert "other" not in view["launch"]["agents_json"]
+
+
+async def test_start_log_hints_when_script_model_unset(tmp_path: Path) -> None:
+    for script_model, hinted in ((None, True), ("haiku", False)):
+        settings = Settings(home=tmp_path / str(script_model), script_model=script_model)
+        app = create_app(settings)
+        async with app.router.lifespan_context(app):
+            pass
+        records = [json.loads(line) for line in settings.server_log_path.read_text().splitlines()]
+        hints = [r for r in records if r["msg"].startswith("script_model is not set")]
+        assert len(hints) == int(hinted), script_model

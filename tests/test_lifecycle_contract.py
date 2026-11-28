@@ -104,3 +104,44 @@ async def test_engine_answer_consumed_by_script(env: Env, kind: str) -> None:
     assert ret["status"] == "completed", ret
     assert "not consumed" not in json.dumps(ret)
     assert second["calls"][: len(first["calls"]) - 1] == first["calls"][:-1]
+
+
+async def _ask(env: Env, task_id: str, workflow_return: dict[str, Any], text: str) -> None:
+    update: dict[str, Any] = {"status": "needs_human", "error": None}
+    assert engine_lifecycle.apply_return(env.engine, update, workflow_return, None) is False
+    async with write_tx() as db:
+        await db.execute(
+            "UPDATE tasks SET status = 'needs_human', question_json = ?, output_json = ? "
+            "WHERE id = ?",
+            (update["question_json"], update["output_json"], task_id),
+        )
+    answered = await env.engine.answer(task_id, text, "mcp")
+    assert answered["status"] == "queued", answered
+
+
+async def test_engine_reask_after_unclear_interpret(env: Env) -> None:
+    """An unclear answer asks again at the same gate; the engine's second answer
+    (k=2, same label and mode) is consumed after interpret-plan-1 replays."""
+    unclear = {"action": "unclear", "extra_rounds": 0, "guidance": ""}
+    args = _args(plan_gate=True)
+    task_id = str((await submit(env, "Build it", agent="team-leader"))["task_id"])
+    first = run_workflow(SCRIPT, args, _responses())
+    await _ask(env, task_id, json.loads(json.dumps(first["return"])), "hmm")
+    one = (await task_row(task_id)).args_dict["answers"]
+    responses = _responses() | {"interpret-plan-1": [unclear]}
+    second = run_workflow(SCRIPT, args | {"answers": one}, responses)
+    reasked = second["return"]
+    assert (reasked["status"], reasked["stage"]) == ("needs_human", "plan"), reasked
+    await _ask(env, task_id, json.loads(json.dumps(reasked)), "approved")
+    two = (await task_row(task_id)).args_dict["answers"]
+    assert two == [
+        {"k": 1, "label": "plan", "mode": "after"},
+        {"k": 2, "label": "plan", "mode": "after"},
+    ]
+    after = _with_epoch(_responses(), 2, skip=("plan",)) | {
+        "interpret-plan-1": [unclear],
+        "interpret-plan-2": [GO],
+    }
+    third = run_workflow(SCRIPT, args | {"answers": two}, after)
+    assert third["return"]["status"] == "completed", third["return"]
+    assert third["calls"][:2] == second["calls"][:2]
