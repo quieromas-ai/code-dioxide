@@ -237,8 +237,10 @@ async def list_tasks(
     kind: str | None = None,
     since: float | None = None,
     until: float | None = None,
+    task: str | None = None,
 ) -> dict[str, Any]:
-    """A page of tasks, newest first; ``since``/``until`` bound ``created_at``."""
+    """A page of tasks, newest first; ``since``/``until`` bound ``created_at``; ``task`` is one
+    task id (at most one row)."""
     clauses: list[str] = []
     params: list[Any] = []
     if status:
@@ -249,6 +251,7 @@ async def list_tasks(
         ("kind = ?", kind),
         ("created_at >= ?", since),
         ("created_at < ?", until),
+        ("id = ?", task),
     ):
         if value is not None:
             clauses.append(clause)

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from src import bundle
 from src.auth import Access, access_of
 from src.mcp_server import ToolProvider
-from src.reports.query import QueryError, parse_filters
+from src.reports.query import QueryError, check_params, parse_filters
 from src.reports.views import reports_list, reports_status
 from src.sse import KEEPALIVE, sse
 
@@ -25,6 +25,11 @@ POLL_S = 1.0
 STREAM_LIMIT = 200
 BUNDLE_CHUNK = 1 << 16
 _UNAVAILABLE = {"error": "engine not started", "status": "unavailable"}
+
+# Every parameter GET /api/v1/tasks accepts: any other one is refused (400), never ignored.
+TASK_LIST_PARAMS = frozenset(
+    {"status", "agent", "limit", "cursor", "project", "kind", "since", "until", "task"}
+)
 
 
 class AnswerBody(BaseModel):
@@ -87,15 +92,21 @@ def build_router(
         kind: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        task: str | None = None,
     ) -> Response:
-        given = {"project": project, "kind": kind, "since": since, "until": until}
+        given = {
+            "status": status, "task": task, "project": project, "kind": kind,
+            "since": since, "until": until,
+        }  # fmt: skip
         try:
+            check_params(request.query_params, TASK_LIST_PARAMS)
+            # An empty value (`?status=` from an unset dropdown) means no filter, as for `agent`.
             filters = parse_filters(
-                {k: v for k, v in given.items() if v is not None}, now=time.time(), windowed=False
+                {k: v for k, v in given.items() if v}, now=time.time(), windowed=False
             )
         except QueryError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        result = await provider.list_tasks(status, agent, limit, cursor, filters)
+        result = await provider.list_tasks(filters.status, agent, limit, cursor, filters)
         if access_of(request.scope) is Access.reports:
             result = reports_list(result)
         return payload(result)

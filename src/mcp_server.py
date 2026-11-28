@@ -222,7 +222,7 @@ class ToolProvider:
         f = filters or Filters()
         listed = await engine.list(
             status, agent, limit, cursor,
-            project=f.project, kind=f.kind, since=f.since, until=f.until,
+            project=f.project, kind=f.kind, since=f.since, until=f.until, task=f.task,
         )  # fmt: skip
         return self._out(engine, listed)
 

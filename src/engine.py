@@ -627,6 +627,7 @@ class TaskEngine:
         cursor: str | None,
         **filters: Any,
     ) -> dict[str, Any]:
-        """``filters``: ``project``, ``kind``, ``since``, ``until`` (``engine_read.list_tasks``)."""
+        """``filters``: ``project``, ``kind``, ``since``, ``until``, ``task``
+        (``engine_read.list_tasks``)."""
         await self.refresh_agents()
         return await engine_read.list_tasks(self, status, agent, limit, cursor, **filters)

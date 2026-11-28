@@ -25,6 +25,15 @@ class QueryError(ValueError):
     """A bad query parameter; its message is the 400 response's error."""
 
 
+def check_params(params: Mapping[str, str], allowed: frozenset[str]) -> None:
+    """A misspelled parameter would silently return unfiltered data: refuse unknown ones."""
+    for name in params:
+        if name not in allowed:
+            raise QueryError(
+                f"unknown query parameter {name!r}: one of {', '.join(sorted(allowed))}"
+            )
+
+
 @dataclass(frozen=True)
 class Filters:
     agent: str | None = None

@@ -32,3 +32,44 @@ async def test_task_list_bad_filter_is_400(env: Env) -> None:
             response = await client.get(f"/api/v1/tasks{query}")
             assert response.status_code == 400, query
             assert "error" in response.json()
+
+
+async def test_task_list_task_filter_returns_one_row(env: Env) -> None:
+    await plant()
+    assert await ids(env, "?task=a2") == ["a2"]
+    assert await ids(env, "?task=a2&kind=single") == []
+    assert await ids(env, "?task=nope") == []
+
+
+async def test_task_list_status_filter_validated(env: Env) -> None:
+    await plant()
+    assert await ids(env, "?status=completed") == ["b1", "a2", "a1"]
+    assert await ids(env, "?status=queued") == []
+
+
+async def test_task_list_task_filter_pages_with_cursor(env: Env) -> None:
+    await plant()
+    async with client_as(env, Access.admin) as client:
+        first = (await client.get("/api/v1/tasks?project=/proj/a&limit=1")).json()
+        assert [r["task_id"] for r in first["tasks"]] == ["a2"]
+        cursor = first["next_cursor"]
+        page = await client.get(f"/api/v1/tasks?task=a1&limit=1&cursor={cursor}")
+        assert page.status_code == 200, page.text
+        assert [r["task_id"] for r in page.json()["tasks"]] == ["a1"]
+        past = await client.get(f"/api/v1/tasks?task=a2&limit=1&cursor={cursor}")
+        assert [r["task_id"] for r in past.json()["tasks"]] == []
+
+
+async def test_task_list_unknown_or_bad_param_is_400(env: Env) -> None:
+    await plant()
+    for access in (Access.admin, Access.reports):
+        async with client_as(env, access) as client:
+            for query in ("?tsk=a1", "?status=bogus", "?task=a1&junk=1"):
+                response = await client.get(f"/api/v1/tasks{query}")
+                assert response.status_code == 400, (access, query)
+                assert "error" in response.json()
+
+
+async def test_task_list_empty_value_is_no_filter(env: Env) -> None:
+    await plant()
+    assert await ids(env, "?status=&task=&project=") == ["b1", "a2", "a1"]

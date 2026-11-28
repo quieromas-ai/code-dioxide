@@ -37,6 +37,7 @@ from src.reports.query import (
     Bucket,
     Filters,
     QueryError,
+    check_params,
     parse_bucket,
     parse_filters,
     parse_group_by,
@@ -82,15 +83,6 @@ FILTER_PARAMS = frozenset({"agent", "task", "project", "status", "kind", "since"
                            "stage_agent"})  # fmt: skip
 LIST_PARAMS = frozenset({"limit", "cursor"})
 METRIC_PARAMS = FILTER_PARAMS | {"group_by", "bucket"}
-
-
-def check_params(request: Request, allowed: frozenset[str]) -> None:
-    """A misspelled parameter would silently return unfiltered data: refuse unknown ones."""
-    for name in request.query_params:
-        if name not in allowed:
-            raise QueryError(
-                f"unknown query parameter {name!r}: one of {', '.join(sorted(allowed))}"
-            )
 
 
 def _index(app: FastAPI) -> dict[str, Any]:
@@ -153,14 +145,14 @@ def build_reports_router(
 
     @router.get("/api/v1/tasks/{task_id}/attempts", tags=["entities"], summary="a task's attempts")
     async def task_attempts(request: Request, task_id: str) -> Response:
-        check_params(request, LIST_PARAMS)
+        check_params(request.query_params, LIST_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         return redacted(engine, await entities.attempts(get_read_db(), task_id, _params(request)))
 
     @router.get("/api/v1/tasks/{task_id}/stages", tags=["entities"], summary="a task's stages")
     async def task_stages(request: Request, task_id: str) -> Response:
-        check_params(request, LIST_PARAMS)
+        check_params(request.query_params, LIST_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         return redacted(engine, await stages.stages(get_read_db(), task_id, _params(request)))
@@ -169,14 +161,14 @@ def build_reports_router(
         "/api/v1/tasks/{task_id}/graph", tags=["entities"], summary="a task's workflow graph"
     )
     async def task_graph(request: Request, task_id: str) -> Response:
-        check_params(request, frozenset())
+        check_params(request.query_params, frozenset())
         if (engine := provider.engine) is None:
             return unavailable()
         return redacted(engine, await stages.graph(get_read_db(), task_id))
 
     @router.get("/api/v1/agents", tags=["entities"], summary="agents and their task counts")
     async def agents(request: Request) -> Response:
-        check_params(request, FILTER_PARAMS | LIST_PARAMS)
+        check_params(request.query_params, FILTER_PARAMS | LIST_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         found = filters(request, engine, windowed=True)
@@ -186,7 +178,7 @@ def build_reports_router(
 
     @router.get("/api/v1/agents/{agent_id}", tags=["entities"], summary="one agent")
     async def agent(request: Request, agent_id: str) -> Response:
-        check_params(request, FILTER_PARAMS)
+        check_params(request.query_params, FILTER_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         found = filters(request, engine, windowed=True)
@@ -194,7 +186,7 @@ def build_reports_router(
 
     @router.get("/api/v1/projects", tags=["entities"], summary="projects (working directories)")
     async def projects(request: Request) -> Response:
-        check_params(request, FILTER_PARAMS | LIST_PARAMS)
+        check_params(request.query_params, FILTER_PARAMS | LIST_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         found = filters(request, engine, windowed=True)
@@ -204,7 +196,7 @@ def build_reports_router(
         "/api/v1/metrics/usage", tags=["metrics"], summary="cost and tokens by attempt end time"
     )
     async def metrics_usage_route(request: Request) -> Response:
-        check_params(request, METRIC_PARAMS)
+        check_params(request.query_params, METRIC_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         params = _params(request)
@@ -221,7 +213,7 @@ def build_reports_router(
         "/api/v1/metrics/time", tags=["metrics"], summary="queued, running and waiting seconds"
     )
     async def metrics_time_route(request: Request) -> Response:
-        check_params(request, METRIC_PARAMS | {"stat"})
+        check_params(request.query_params, METRIC_PARAMS | {"stat"})
         if (engine := provider.engine) is None:
             return unavailable()
         params = _params(request)
@@ -240,7 +232,7 @@ def build_reports_router(
         "/api/v1/metrics/reliability", tags=["metrics"], summary="outcomes, retries and failures"
     )
     async def metrics_reliability_route(request: Request) -> Response:
-        check_params(request, METRIC_PARAMS)
+        check_params(request.query_params, METRIC_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         params = _params(request)
@@ -257,7 +249,7 @@ def build_reports_router(
         "/api/v1/metrics/stages", tags=["metrics"], summary="stage tokens, tool calls, duration"
     )
     async def metrics_stages_route(request: Request) -> Response:
-        check_params(request, METRIC_PARAMS)
+        check_params(request.query_params, METRIC_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         params = _params(request)
@@ -272,7 +264,7 @@ def build_reports_router(
         "/api/v1/metrics/savings", tags=["metrics"], summary="cached stages and deduplicated calls"
     )
     async def metrics_savings_route(request: Request) -> Response:
-        check_params(request, METRIC_PARAMS)
+        check_params(request.query_params, METRIC_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         params = _params(request)
@@ -284,7 +276,7 @@ def build_reports_router(
 
     @router.get("/api/v1/activity", tags=["activity"], summary="running and waiting tasks now")
     async def activity_now(request: Request) -> Response:
-        check_params(request, FILTER_PARAMS)
+        check_params(request.query_params, FILTER_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         now = time.time()
@@ -300,7 +292,7 @@ def build_reports_router(
         row, then each new event (``event: event``, ``id:`` its id) and a ``progress`` per
         changed row (``{"task", "removed": true}`` for a row gone). A reconnect with
         ``Last-Event-ID`` misses no event and repeats none."""
-        check_params(request, FILTER_PARAMS | {"last_event_id"})
+        check_params(request.query_params, FILTER_PARAMS | {"last_event_id"})
         if (engine := provider.engine) is None:
             return unavailable()
         start = start_event_id(request)
@@ -348,7 +340,7 @@ def build_reports_router(
 
     @router.get("/api/v1/events", tags=["activity"], summary="the event log")
     async def event_log(request: Request) -> Response:
-        check_params(request, FILTER_PARAMS | LIST_PARAMS | {"type"})
+        check_params(request.query_params, FILTER_PARAMS | LIST_PARAMS | {"type"})
         if (engine := provider.engine) is None:
             return unavailable()
         found = filters(request, engine, windowed=True)
@@ -359,14 +351,14 @@ def build_reports_router(
 
     @router.get("/api/v1/agents/{agent_id}/prompt", tags=["content"], summary="an agent's prompt")
     async def agent_prompt(request: Request, agent_id: str) -> Response:
-        check_params(request, frozenset())
+        check_params(request.query_params, frozenset())
         if (engine := provider.engine) is None:
             return unavailable()
         return redacted(engine, await content.agent_prompt(engine, agent_id))
 
     @router.get("/api/v1/tasks/{task_id}/prompts", tags=["content"], summary="a task's prompts")
     async def task_prompts(request: Request, task_id: str) -> Response:
-        check_params(request, frozenset())
+        check_params(request.query_params, frozenset())
         if (engine := provider.engine) is None:
             return unavailable()
         return redacted(engine, await content.task_prompts(engine, get_read_db(), task_id))
@@ -375,7 +367,7 @@ def build_reports_router(
         "/api/v1/tasks/{task_id}/events", tags=["content"], summary="a task's events, full data"
     )
     async def task_events(request: Request, task_id: str) -> Response:
-        check_params(request, LIST_PARAMS | {"type"})
+        check_params(request.query_params, LIST_PARAMS | {"type"})
         if (engine := provider.engine) is None:
             return unavailable()
         types = events.parse_types(request.query_params.get("type"))
@@ -387,7 +379,7 @@ def build_reports_router(
         summary="a stage's result",
     )  # fmt: skip
     async def stage_result(request: Request, task_id: str, label: str) -> Response:
-        check_params(request, frozenset())
+        check_params(request.query_params, frozenset())
         if (engine := provider.engine) is None:
             return unavailable()
         return redacted(engine, await content.stage_result(engine, get_read_db(), task_id, label))
@@ -397,7 +389,7 @@ def build_reports_router(
         summary="a stage's transcript, paged",
     )  # fmt: skip
     async def stage_transcript(request: Request, task_id: str, label: str) -> Response:
-        check_params(request, LIST_PARAMS)
+        check_params(request.query_params, LIST_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
         limit = parse_limit(request.query_params.get("limit"))
@@ -407,7 +399,7 @@ def build_reports_router(
 
     @router.get("/api/v1/tasks/{task_id}/summary", tags=["content"], summary="a task summary")
     async def task_summary(request: Request, task_id: str) -> Response:
-        check_params(request, frozenset())
+        check_params(request.query_params, frozenset())
         if (engine := provider.engine) is None:
             return unavailable()
         try:
@@ -427,7 +419,9 @@ def build_reports_router(
         "/api/v1/metrics/overhead", tags=["metrics"], summary="dioxide's own spend (summaries)"
     )
     async def metrics_overhead_route(request: Request) -> Response:
-        check_params(request, frozenset({"task", "since", "until", "bucket", "group_by"}))
+        check_params(
+            request.query_params, frozenset({"task", "since", "until", "bucket", "group_by"})
+        )
         if (engine := provider.engine) is None:
             return unavailable()
         params = _params(request)

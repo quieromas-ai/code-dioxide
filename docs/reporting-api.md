@@ -33,7 +33,7 @@ stage's agent type) only where there are stages. Each route takes:
 
 | Route | Parameters |
 |---|---|
-| `/tasks` | `status`, `agent`, `project`, `kind`, `since`, `until` (bound `created_at`; no default window), `limit` (default 20), `cursor` |
+| `/tasks` | `status`, `agent`, `task` (one task id), `project`, `kind`, `since`, `until` (bound `created_at`; no default window), `limit` (default 20), `cursor` |
 | `/tasks/{id}`, `/tasks/{id}/graph` | none |
 | `/tasks/{id}/attempts`, `/tasks/{id}/stages` | `limit`, `cursor` |
 | `/agents`, `/projects` | filters except `stage_agent`, `limit`, `cursor` |
@@ -49,8 +49,9 @@ stage's agent type) only where there are stages. Each route takes:
 | `/tasks/{id}/stages/{label}/transcript` | `limit`, `cursor` |
 | `/agents/{id}/prompt`, `/tasks/{id}/prompts`, `/tasks/{id}/stages/{label}/result`, `/tasks/{id}/summary` | none |
 
-Every route under `/api/v1` except `/tasks` and `/tasks/{id}` refuses an unknown parameter
-(400); those two ignore it.
+Every reporting route in the tables above except `/tasks/{id}` refuses an unknown parameter
+(400), and a bad `status` is 400 too; `/tasks/{id}` ignores parameters. On `/tasks` an empty
+value (`?status=`) means no filter.
 
 **Times.** `since`/`until` are epoch seconds or ISO 8601 (no offset means UTC). A window is
 `since` ≤ time < `until`; windowed routes default to the last 30 days up to now. Responses give
