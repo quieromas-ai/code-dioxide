@@ -29,6 +29,10 @@ All notable changes to code-dioxide. The format follows
 
 ### Changed
 
+- `/api/v1/tasks/{id}/graph`: `next` edges join waves of time-overlapping steps instead of
+  phase runs (fewer cross-phase edges; sequential steps of one phase are now linked); new edge
+  kind `gate` (ask → its interpret stages). Node and edge id formats are unchanged.
+
 - `/api/v1/agents`: `last_active_at` includes the agent's lifecycle stage work (it can move
   later), and `status` is `busy` while one of its stages runs. New fields `stages_total`,
   `stage_tasks_total`, `running_stages`.

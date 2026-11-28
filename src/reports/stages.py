@@ -22,7 +22,7 @@ async def _steps(db: aiosqlite.Connection, task_id: str) -> tuple[str, list[aios
         raise NotFound(f"task {task_id} not found")
     async with db.execute(
         "SELECT label, phase, status, started_count, cached, started_at, finished_at, "
-        "agent_type, model, stage_tokens, tool_calls, last_tool, duration_s "
+        "agent_type, model, stage_tokens, tool_calls, last_tool, duration_s, last_progress_at "
         "FROM steps WHERE task_id = ? ORDER BY started_at, rowid",
         (task_id,),
     ) as cur:
@@ -56,10 +56,78 @@ def _edge(source: str, target: str, kind: str) -> dict[str, str]:
     return {"id": f"{source}->{target}", "source": source, "target": target, "mainStat": kind}
 
 
+_INTERPRET = re.compile(r"^interpret-(?P<ask>.+)-(?P<k>\d+)$")
+
+
+def _waves(found: list[aiosqlite.Row], task_status: str) -> list[list[str]]:
+    """Steps grouped by time overlap, in start order (ties by label): a step joins the current
+    wave when it starts before the wave's latest finish. A running step is open-ended (it
+    absorbs every later start); a step with no finish that is not running (interrupted) ends at
+    its last progress (its start without one). Touching intervals are two waves; steps with no
+    start form a last wave."""
+    timed = sorted(
+        (r for r in found if r["started_at"] is not None),
+        key=lambda r: (r["started_at"], r["label"]),
+    )
+    waves: list[list[str]] = []
+    wave_end = float("-inf")
+    for r in timed:
+        start = float(r["started_at"])
+        if r["finished_at"] is not None:
+            end = float(r["finished_at"])
+        elif served_step_status(r["status"], task_status) == "running":
+            end = float("inf")
+        else:
+            end = max(start, float(r["last_progress_at"] or start))
+        if waves and start < wave_end:
+            waves[-1].append(r["label"])
+            wave_end = max(wave_end, end)
+        else:
+            waves.append([r["label"]])
+            wave_end = end
+    untimed = sorted(r["label"] for r in found if r["started_at"] is None)
+    return [*waves, untimed] if untimed else waves
+
+
+def _split_epoch(label: str) -> tuple[str, str]:
+    """``X@aK`` -> (``X``, ``@aK``); a label without the suffix -> (label, "")."""
+    m = _ATTEMPT.match(label)
+    return (m["base"], f"@a{m['n']}") if m is not None else (label, "")
+
+
+def _askers(ask: str, labels: list[str]) -> list[str]:
+    """The steps that asked at gate ``ask``: the step itself, or, for a round gate with no step of
+    its own (``review-rN``), every step of that round (``review-rN-<reviewer>``, same epoch)."""
+    if ask in labels:
+        return [ask]
+    base, epoch = _split_epoch(ask)
+    found = []
+    for label in labels:
+        step, step_epoch = _split_epoch(label)
+        if step.startswith(f"{base}-") and step_epoch == epoch and not _INTERPRET.match(label):
+            found.append(label)
+    return found
+
+
+def _specific_edges(labels: list[str]) -> list[dict[str, str]]:
+    """``retry``: ``X@aN`` to ``X@aN+1`` (a label without the suffix is the first run: ``X`` →
+    ``X@a1``); ``gate``: the asking step(s) to each ``interpret-<ask>-<k>`` (``_askers``)."""
+    present = set(labels)
+    edges = []
+    for label in labels:
+        m = _ATTEMPT.match(label)
+        base, n = (m["base"], int(m["n"])) if m is not None else (label, 0)
+        if (following := f"{base}@a{n + 1}") in present:
+            edges.append(_edge(label, following, "retry"))
+        if (g := _INTERPRET.match(label)) is not None:
+            edges += [_edge(asker, label, "gate") for asker in _askers(g["ask"], labels)]
+    return edges
+
+
 async def graph(db: aiosqlite.Connection, task_id: str) -> dict[str, Any]:
-    """Nodes are steps; ``next`` edges join every stage of a phase run (consecutive stages of
-    one phase, by start) to every stage of the next run; ``retry`` edges join ``X@aN`` to
-    ``X@aN+1`` (a label without the suffix is the first run: ``X`` → ``X@a1``)."""
+    """Nodes are steps; ``next`` edges join every step of a wave (steps overlapping in time, see
+    ``_waves``) to every step of the next wave; ``retry`` and ``gate`` edges (``_specific_edges``)
+    replace a ``next`` edge between the same pair."""
     task_status, found = await _steps(db, task_id)
     nodes = [
         {
@@ -71,25 +139,14 @@ async def graph(db: aiosqlite.Connection, task_id: str) -> dict[str, Any]:
         }
         for r in found
     ]  # fmt: skip
-    # Runs of consecutive stages of one phase, in start order: a phase that comes back (a
-    # second review round after a fix) is a new run.
-    groups: list[list[str]] = []
-    previous: object = object()
-    for r in found:
-        if r["phase"] != previous:
-            groups.append([])
-            previous = r["phase"]
-        groups[-1].append(r["label"])
-    edges = [
+    specific = _specific_edges([r["label"] for r in found])
+    taken = {e["id"] for e in specific}
+    waves = _waves(found, task_status)
+    nexts = [
         _edge(source, target, "next")
-        for earlier, later in zip(groups, groups[1:], strict=False)
+        for earlier, later in zip(waves, waves[1:], strict=False)
         for source in earlier
         for target in later
+        if f"{source}->{target}" not in taken
     ]
-    labels = {r["label"] for r in found}
-    for label in [r["label"] for r in found]:
-        m = _ATTEMPT.match(label)
-        base, n = (m["base"], int(m["n"])) if m is not None else (label, 0)
-        if (following := f"{base}@a{n + 1}") in labels:
-            edges.append(_edge(label, following, "retry"))
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": [*nexts, *specific]}

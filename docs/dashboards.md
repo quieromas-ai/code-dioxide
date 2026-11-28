@@ -46,7 +46,7 @@ a few days and `bucket=day` beyond; more than 5000 rows is refused.
 | What runs now | `/activity` | table: `task`, `agent`, `stage`, `last_tool`, `cost_usd`, `waiting_on`, `since` |
 | Recent failures | `/events?type=attempt_finished,auth_failed,permission_denied,stall,timeout` | table: `at`, `task`, `type`, `data` |
 | Tasks list | `/tasks?limit=100` (Rows/Root `tasks`) | table: `task_id`, `agent`, `status`, `stage`, `cost_usd`, `created_at` |
-| One task's workflow | `/tasks/{id}/graph` | Node Graph panel: two queries, Rows/Root `nodes` and `edges` (the fields already use Node Graph's names) |
+| One task's workflow | `/tasks/{id}/graph` | Node Graph panel: two queries, Rows/Root `nodes` and `edges` (the fields already use Node Graph's names); edge kinds `next`, `retry`, `gate` |
 
 Use a dashboard variable for `agent`, `project` or `task` and add it as a query parameter
 (`&agent=${agent}`); `/agents` and `/projects` list the values.

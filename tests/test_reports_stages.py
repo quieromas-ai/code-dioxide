@@ -79,10 +79,11 @@ async def test_graph_nodes_and_edges(reports: Env) -> None:
         "secondaryStat": "1.5s", "phase": "Plan",
     }  # fmt: skip
     edges = {(e["source"], e["target"], e["mainStat"]) for e in body["edges"]}
+    # Waves: [plan@a1], [implement@a1], [implement@a2 (running: open-ended), both reviews]; the
+    # retry edge replaces the next edge between the two implement runs.
     assert edges == {
-        ("plan@a1", "implement@a1", "next"), ("plan@a1", "implement@a2", "next"),
+        ("plan@a1", "implement@a1", "next"),
         ("implement@a1", "review-r1-x@a1", "next"), ("implement@a1", "review-r1-y@a1", "next"),
-        ("implement@a2", "review-r1-x@a1", "next"), ("implement@a2", "review-r1-y@a1", "next"),
         ("implement@a1", "implement@a2", "retry"),
     }  # fmt: skip
     assert all(e["id"] == f"{e['source']}->{e['target']}" for e in body["edges"])
@@ -130,3 +131,120 @@ async def test_graph_retry_edge_from_unsuffixed_first_run(reports: Env) -> None:
     assert [(e["source"], e["target"], e["mainStat"]) for e in edges] == [
         ("plan", "plan@a1", "retry")
     ]
+
+
+async def _graph_edges(
+    reports: Env,
+    task_id: str,
+    steps: list[tuple[str, float | None, float | None, str]],
+    status: str = "completed",
+) -> set[tuple[str, str, str]]:
+    await insert_task(task_id, kind="lifecycle", status=status)
+    for label, started, finished, step_status in steps:
+        await insert_step(
+            task_id, label, phase="P", status=step_status, started_at=started,
+            finished_at=finished,
+        )  # fmt: skip
+    async with client_as(reports, Access.reports) as client:
+        body = (await client.get(f"/api/v1/tasks/{task_id}/graph")).json()
+    ids = [e["id"] for e in body["edges"]]
+    assert len(ids) == len(set(ids)), ids  # Grafana needs unique edge ids
+    return {(e["source"], e["target"], e["mainStat"]) for e in body["edges"]}
+
+
+async def test_graph_parallel_reviews_share_a_wave(reports: Env) -> None:
+    edges = await _graph_edges(reports, "g1", [
+        ("implement", 1.0, 10.0, "completed"),
+        ("review-r1-a", 11.0, 20.0, "completed"), ("review-r1-b", 12.0, 18.0, "completed"),
+        ("qa-r1", 21.0, 30.0, "completed"),
+    ])  # fmt: skip
+    assert edges == {
+        ("implement", "review-r1-a", "next"), ("implement", "review-r1-b", "next"),
+        ("review-r1-a", "qa-r1", "next"), ("review-r1-b", "qa-r1", "next"),
+    }  # fmt: skip
+
+
+async def test_graph_sequential_same_phase_and_touching_are_waves(reports: Env) -> None:
+    edges = await _graph_edges(reports, "g2", [
+        ("setup", 1.0, 5.0, "completed"), ("implement", 5.0, 9.0, "completed"),  # touching
+        ("deploy", 9.5, 12.0, "completed"),
+    ])  # fmt: skip
+    assert edges == {("setup", "implement", "next"), ("implement", "deploy", "next")}
+
+
+async def test_graph_running_step_absorbs_later_starts(reports: Env) -> None:
+    edges = await _graph_edges(reports, "g3", [
+        ("implement", 1.0, 5.0, "completed"), ("review-r1-a", 6.0, None, "running"),
+        ("review-r1-b", 100.0, 110.0, "completed"),
+    ], status="running")  # fmt: skip
+    assert edges == {
+        ("implement", "review-r1-a", "next"), ("implement", "review-r1-b", "next"),
+    }  # fmt: skip
+    # The same step interrupted (task not running) spans only its start.
+    edges = await _graph_edges(reports, "g4", [
+        ("implement", 1.0, 5.0, "completed"), ("review-r1-a", 6.0, None, "running"),
+        ("review-r1-b", 100.0, 110.0, "completed"),
+    ], status="failed")  # fmt: skip
+    assert ("review-r1-a", "review-r1-b", "next") in edges
+
+
+async def test_graph_gate_edges_replace_next(reports: Env) -> None:
+    edges = await _graph_edges(reports, "g5", [
+        ("plan", 1.0, 5.0, "completed"), ("interpret-plan-1", 10.0, 11.0, "completed"),
+        ("interpret-plan-2", 20.0, 21.0, "completed"), ("plan@a2", 22.0, 30.0, "completed"),
+        ("interpret-plan@a2-3", 40.0, 41.0, "completed"),
+    ])  # fmt: skip
+    assert edges == {
+        ("plan", "interpret-plan-1", "gate"), ("plan", "interpret-plan-2", "gate"),
+        ("interpret-plan-1", "interpret-plan-2", "next"),
+        ("interpret-plan-2", "plan@a2", "next"),
+        ("plan@a2", "interpret-plan@a2-3", "gate"),
+    }  # fmt: skip
+
+
+async def test_graph_step_without_start_is_a_last_wave(reports: Env) -> None:
+    edges = await _graph_edges(reports, "g6", [
+        ("plan", 1.0, 5.0, "completed"), ("implement", None, None, "pending"),
+    ])  # fmt: skip
+    assert edges == {("plan", "implement", "next")}
+
+
+async def test_graph_interrupted_parallel_steps_stay_one_wave(reports: Env) -> None:
+    await insert_task("g7", kind="lifecycle", status="failed")
+    await insert_step("g7", "implement", phase="P", status="completed", started_at=1.0,
+                      finished_at=5.0)  # fmt: skip
+    for label, started in (("review-r1-a", 11.0), ("review-r1-b", 12.0), ("review-r1-c", 13.0)):
+        await insert_step("g7", label, phase="P", status="running", started_at=started,
+                          last_progress_at=30.0)  # fmt: skip
+    await insert_step("g7", "review-r1-d", phase="P", status="running", started_at=40.0)
+    async with client_as(reports, Access.reports) as client:
+        body = (await client.get("/api/v1/tasks/g7/graph")).json()
+    edges = {(e["source"], e["target"]) for e in body["edges"]}
+    assert edges == {
+        ("implement", "review-r1-a"), ("implement", "review-r1-b"), ("implement", "review-r1-c"),
+        ("review-r1-a", "review-r1-d"), ("review-r1-b", "review-r1-d"),
+        ("review-r1-c", "review-r1-d"),
+    }  # fmt: skip
+
+
+async def test_graph_review_round_gate_links_every_reviewer(reports: Env) -> None:
+    edges = await _graph_edges(reports, "g8", [
+        ("review-r1-a", 1.0, 5.0, "completed"), ("review-r1-b", 1.5, 6.0, "completed"),
+        ("interpret-review-r1-1", 10.0, 11.0, "completed"),
+        ("review-r2-a@a1", 12.0, 15.0, "completed"),
+        ("interpret-review-r2@a1-2", 20.0, 21.0, "completed"),
+    ])  # fmt: skip
+    gates = {(s, t) for s, t, kind in edges if kind == "gate"}
+    assert gates == {
+        ("review-r1-a", "interpret-review-r1-1"), ("review-r1-b", "interpret-review-r1-1"),
+        ("review-r2-a@a1", "interpret-review-r2@a1-2"),
+    }  # fmt: skip
+
+
+async def test_graph_start_tie_broken_by_label(reports: Env) -> None:
+    edges = await _graph_edges(reports, "g9", [
+        ("b-step", 1.0, 2.0, "completed"), ("a-step", 1.0, 1.0, "completed"),
+        ("c-step", 3.0, 4.0, "completed"),
+    ])  # fmt: skip
+    # a-step (zero length, first by label) is its own wave; b-step starts at its end: a new wave.
+    assert edges == {("a-step", "b-step", "next"), ("b-step", "c-step", "next")}

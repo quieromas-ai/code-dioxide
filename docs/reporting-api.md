@@ -124,10 +124,15 @@ resume keeps the numbers of the run that measured it; that run counts in `runs`,
 never add it to `tokens` or price it. Steps mirrored before this version get their numbers from
 `repair-usage` (from the run-store copy of the run file). `/tasks/{id}/graph` returns
 `{"nodes", "edges"}` in the field names of Grafana's Node Graph panel (`id`, `title`,
-`subTitle`, `mainStat`, `secondaryStat`; edges `id`, `source`, `target`, `mainStat` = `next` or
-`retry`): every stage of a phase links to every stage of the next phase in start order (a
-phase that comes back, such as a second review round, is linked again), and `X@aN` to `X@aN+1`
-(`X` to `X@a1`).
+`subTitle`, `mainStat`, `secondaryStat`; edges `id`, `source`, `target`, `mainStat` = `next`,
+`retry` or `gate`). Steps are grouped into waves by time overlap (in start order, a step joins
+the wave when it starts strictly before the wave's latest finish; a running step stays open,
+an interrupted one ends at its last progress; steps never started form a last wave), so
+parallel reviews share a wave; `next` links every step of a wave to every step of the next.
+`retry` links `X@aN` to `X@aN+1` (`X` to `X@a1`; the suffix is the answer epoch, so a jump of
+more than one answer has no `retry` edge), `gate` links the asking step to each
+`interpret-<ask>-<k>` (for a review round, every reviewer step of that round);
+either replaces a `next` edge between the same pair, so edge ids stay unique.
 
 **Activity.** `/activity` has one row per running task, per task waiting on a human
 (`waiting_on: human`) and per task queued for a later relaunch (`rate_limit`, `backoff`,
