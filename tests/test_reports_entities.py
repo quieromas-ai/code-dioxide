@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 
 import httpx
 from fastapi import FastAPI
@@ -10,7 +11,7 @@ from src.model_usage import write_models
 from src.reports.routes import install_reports
 from src.stream import ModelUsage
 from tests.helpers import Env
-from tests.reports_fixture import client_as, insert_attempt, insert_event, insert_task
+from tests.reports_fixture import client_as, insert_attempt, insert_event, insert_step, insert_task
 
 NOW = time.time()
 DAY = 86400.0
@@ -148,3 +149,90 @@ async def test_attempt_rows_carry_breakdown(reports: Env) -> None:
     keys = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
     assert [rows[0][k] for k in keys] == [2, 3, 4, 1]
     assert [rows[1][k] for k in keys] == [None] * 4
+
+
+async def plant_stages() -> None:
+    """A lifecycle task submitted to ``lead`` whose stages ran on other agents."""
+    await insert_task(
+        "L1", agent="lead", kind="lifecycle", cwd="/proj/a", status="running",
+        created_at=NOW - 2 * DAY, started_at=NOW - 2 * DAY,
+    )  # fmt: skip
+    await insert_step(
+        "L1", "plan", status="completed", agent_type="planner",
+        started_at=NOW - 2 * DAY, finished_at=NOW - 2 * DAY + 60,
+    )  # fmt: skip
+    await insert_step(
+        "L1", "implement", status="running", agent_type="implementer",
+        started_at=NOW - 60,
+    )  # fmt: skip
+    await insert_step("L1", "setup", status="completed", agent_type=None, started_at=NOW - 30)
+    await insert_task(
+        "L2", agent="lead", kind="lifecycle", cwd="/proj/b", status="failed",
+        created_at=NOW - DAY, completed_at=NOW - DAY + 100,
+    )  # fmt: skip
+    await insert_step(
+        "L2", "implement", status="running", agent_type="implementer",  # stale: task failed
+        started_at=NOW - DAY,
+    )  # fmt: skip
+
+
+async def test_agent_rows_count_stage_work(reports: Env) -> None:
+    await plant_stages()
+    rows = {r["id"]: r for r in (await get(reports, "/api/v1/agents")).json()["rows"]}
+    planner, impl, lead = rows["planner"], rows["implementer"], rows["lead"]
+    # Stage-only activity: last_active_at is the latest stage timestamp; tasks_total unchanged.
+    assert (planner["tasks_total"], planner["stages_total"], planner["stage_tasks_total"]) == (
+        0, 1, 1,
+    )  # fmt: skip
+    assert planner["last_active_at"] is not None
+    assert abs(_epoch(planner["last_active_at"]) - (NOW - 2 * DAY + 60)) < 1
+    assert (planner["status"], planner["running_stages"]) == ("idle", 0)
+    # Running stages count only status running of running tasks; busy from a stage alone.
+    assert (impl["tasks_total"], impl["stages_total"], impl["stage_tasks_total"]) == (0, 2, 2)
+    assert (impl["running_stages"], impl["running_tasks"], impl["status"]) == (1, 0, "busy")
+    # The lifecycle agent: its own tasks, no stage rows (script stages are nobody's).
+    assert (lead["tasks_total"], lead["stages_total"], lead["running_stages"]) == (2, 0, 0)
+
+
+async def test_agent_last_active_is_later_of_task_and_stage(reports: Env) -> None:
+    await plant()  # implementer: task t2 started NOW - DAY
+    await plant_stages()  # implementer: stage started NOW - 60
+    rows = {r["id"]: r for r in (await get(reports, "/api/v1/agents")).json()["rows"]}
+    impl = rows["implementer"]
+    assert impl["tasks_total"] == 2  # unchanged by stage rows
+    assert abs(_epoch(impl["last_active_at"]) - (NOW - 60)) < 1
+
+
+async def test_agent_filter_matches_stage_agent(reports: Env) -> None:
+    await plant_stages()
+    one = (await get(reports, "/api/v1/agents/implementer")).json()
+    assert (one["stages_total"], one["running_stages"], one["status"]) == (2, 1, "busy")
+    filtered = (await get(reports, "/api/v1/agents?agent=planner")).json()["rows"]
+    by_id = {r["id"]: r for r in filtered}
+    assert by_id["planner"]["stages_total"] == 1 and by_id["implementer"]["stages_total"] == 0
+
+
+def _epoch(iso: str) -> float:
+    return datetime.fromisoformat(iso).timestamp()
+
+
+async def test_agent_stage_figures_window_alias_and_script_stages(reports: Env) -> None:
+    await plant_stages()
+    await insert_task(
+        "OLD", agent="lead", kind="lifecycle", status="completed",
+        created_at=NOW - 40 * DAY, completed_at=NOW - 39 * DAY,
+    )  # fmt: skip
+    await insert_step(
+        "OLD", "plan", status="completed", agent_type="planner",
+        started_at=NOW - 40 * DAY, finished_at=NOW - 40 * DAY + 5,
+    )  # fmt: skip
+    rows = {r["id"]: r for r in (await get(reports, "/api/v1/agents")).json()["rows"]}
+    assert rows["planner"]["stages_total"] == 1  # OLD's stage is outside the 30-day window
+    wide = (await get(reports, f"/api/v1/agents?since={NOW - 50 * DAY}")).json()["rows"]
+    assert {r["id"]: r for r in wide}["planner"]["stages_total"] == 2
+    # The setup step (no agent, NOW - 30) is nobody's activity: lead's stays its task's start.
+    assert abs(_epoch(rows["lead"]["last_active_at"]) - (NOW - DAY + 100)) < 1
+    aliased = (await get(reports, "/api/v1/agents/dev")).json()  # dev -> implementer
+    assert (aliased["id"], aliased["stages_total"]) == ("implementer", 2)
+    by_alias = (await get(reports, "/api/v1/agents?agent=dev")).json()["rows"]
+    assert {r["id"]: r for r in by_alias}["implementer"]["running_stages"] == 1

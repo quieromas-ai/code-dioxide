@@ -29,5 +29,9 @@ All notable changes to code-dioxide. The format follows
 
 ### Changed
 
+- `/api/v1/agents`: `last_active_at` includes the agent's lifecycle stage work (it can move
+  later), and `status` is `busy` while one of its stages runs. New fields `stages_total`,
+  `stage_tasks_total`, `running_stages`.
+
 - Docs: reliability `resumes` (resumed launches, answers included) is not the recovery budget
   (`recovery.resumes` on a task).

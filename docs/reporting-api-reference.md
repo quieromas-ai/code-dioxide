@@ -73,8 +73,13 @@ attempts, answer resumes included), `uncounted_attempts`, `cost_complete`, `outp
 `started_count`, `cached`, `started_at`, `finished_at`, `duration_s`, `stage_tokens`,
 `tool_calls`, `last_tool`.
 
-**`/agents` rows**: `id`, `role`, `model`, `status` (`busy`/`idle` now), `running_tasks` (now),
-`tasks_total` (created in the window), `last_active_at`; `/agents/{id}` adds
+**`/agents` rows**: `id`, `role`, `model`, `status` (`busy`/`idle` now: running a task or a
+stage), `running_tasks` (now), `tasks_total` (tasks submitted to the agent, created in the
+window), `stages_total` / `stage_tasks_total` (lifecycle stages the agent ran, and their distinct
+tasks, of tasks created in the window), `running_stages` (now), `last_active_at` (the later of
+its last task activity and its last stage start or finish); `agent=` matches the task's agent
+for task figures and the stage's agent for stage figures; script stages (no agent) count for
+no agent. MCP `get_agents` / `get_active_agents` count only submitted tasks as busy. `/agents/{id}` adds
 `tasks_by_status`. **`/projects` rows**: `project`, `tasks_total` (created in the window),
 `running` (now), `last_task_at`.
 

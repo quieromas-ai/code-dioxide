@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import replace
 from typing import Any
 
 import aiosqlite
@@ -120,6 +121,46 @@ async def _running(db: aiosqlite.Connection, filters: Filters, group: str) -> di
         return {r["k"]: int(r["n"]) for r in await cur.fetchall()}
 
 
+def _stage_filter(filters: Filters) -> tuple[str, list[Any]]:
+    """The task filters plus, for ``agent``, the stage's agent (``s.agent_type``) instead of the
+    task's: an agent's stage work runs inside tasks submitted to another agent."""
+    cond, args = where(replace(filters, agent=None), time_column="t.created_at")
+    if filters.agent is not None:
+        return f"{cond} AND s.agent_type = ?", [*args, filters.agent]
+    return cond, args
+
+
+async def _stage_counts(db: aiosqlite.Connection, filters: Filters) -> dict[str, dict[str, Any]]:
+    """Per stage agent: stages of tasks created in the window, the distinct tasks, the last stage
+    activity (start or finish). Script stages (no agent type) are not an agent's work."""
+    cond, args = _stage_filter(filters)
+    async with db.execute(
+        "SELECT s.agent_type AS k, count(*) AS n, count(DISTINCT s.task_id) AS tasks, "
+        "max(max(coalesce(s.started_at, 0), coalesce(s.finished_at, 0))) AS last "
+        "FROM steps s JOIN tasks t ON t.id = s.task_id "
+        f"WHERE {cond} AND s.agent_type IS NOT NULL GROUP BY s.agent_type",
+        args,
+    ) as cur:
+        return {
+            r["k"]: {"total": int(r["n"]), "tasks": int(r["tasks"]), "last": r["last"] or 0.0}
+            for r in await cur.fetchall()
+        }
+
+
+async def _running_stages(db: aiosqlite.Connection, filters: Filters) -> dict[str, int]:
+    """Running stages per stage agent now (of running tasks: a stopped task's step row may still
+    say running)."""
+    current = Filters(agent=filters.agent, project=filters.project, kind=filters.kind)
+    cond, args = _stage_filter(current)
+    async with db.execute(
+        "SELECT s.agent_type AS k, count(*) AS n FROM steps s JOIN tasks t ON t.id = s.task_id "
+        f"WHERE {cond} AND s.status = 'running' AND t.status = 'running' "
+        "AND s.agent_type IS NOT NULL GROUP BY s.agent_type",
+        args,
+    ) as cur:
+        return {r["k"]: int(r["n"]) for r in await cur.fetchall()}
+
+
 async def _agent_rows(
     db: aiosqlite.Connection, engine: TaskEngine, filters: Filters
 ) -> list[dict[str, Any]]:
@@ -127,18 +168,25 @@ async def _agent_rows(
     roles = roles_by_agent(engine.roles)
     counts = await _task_counts(db, filters, "t.agent")
     running = await _running(db, filters, "t.agent")
+    stages = await _stage_counts(db, filters)
+    running_stages = await _running_stages(db, filters)
     rows = []
     for slug in sorted(engine.agents):
         entry = counts.get(slug, {"total": 0, "last": 0.0, "by_status": {}})
+        stage = stages.get(slug, {"total": 0, "tasks": 0, "last": 0.0})
+        busy = running.get(slug, 0) or running_stages.get(slug, 0)
         rows.append(
             {
                 "id": slug,
                 "role": ",".join(roles.get(slug, [])),
                 "model": engine.agents[slug].model,
-                "status": "busy" if running.get(slug) else "idle",
+                "status": "busy" if busy else "idle",
                 "running_tasks": running.get(slug, 0),
                 "tasks_total": entry["total"],
-                "last_active_at": iso_or_none(entry["last"] or None),
+                "stages_total": stage["total"],
+                "stage_tasks_total": stage["tasks"],
+                "running_stages": running_stages.get(slug, 0),
+                "last_active_at": iso_or_none(max(entry["last"], stage["last"]) or None),
                 "tasks_by_status": entry["by_status"],
             }
         )
