@@ -15,8 +15,9 @@ Default ratios (Anthropic prompt caching docs,
 https://platform.claude.com/docs/en/build-with-claude/prompt-caching): a 5-minute cache write
 costs 1.25x base input, a 1-hour write 2x, a cache read about 0.1x (it varies by model, e.g. 0.05x
 for Opus 5.5); output is 5x on current models. The parent session's cache writes are not split
-by duration in ``modelUsage``: they weigh ``parent_cache_write`` (default 2x: dioxide's parent
-sessions observed writing 1-hour entries). Every ratio is overridable per model (prefix match).
+by duration in ``modelUsage``: they weigh ``parent_cache_write`` (default 2x: Claude Code parent
+sessions write mostly 1-hour cache entries, while subagent stages write 5-minute ones). Every
+ratio is overridable per model (prefix match).
 """
 
 from collections.abc import Mapping

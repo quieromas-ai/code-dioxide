@@ -125,6 +125,10 @@ never add it to `tokens` or price it. Billed usage per stage (`billed_*_tokens`,
 by the server from the stage's transcript when the step completes (each API turn once), and
 again at the attempt's end.
 
+Steps mirrored before progress numbers were recorded get them from
+`repair-usage` (from the run-store copy of the run file); it does not fill billed usage or
+stage cost.
+
 **Stage cost.** `estimated_cost_usd` splits the attempt's known per-model cost (the CLI's
 `modelUsage`, as `/metrics/usage`) across the stages that used that model in that attempt and
 the parent session's own overhead; there is no price list. `cost_basis` is `exact` when one
@@ -134,19 +138,22 @@ each participant gets a share by token-class weights relative to base input (def
 the parent overhead takes the residual (and the share of stages of a workflow run replaced by a
 fresh start), so stage estimates plus `parent_overhead_estimated_cost_usd` equal the attempt's
 cost exactly. The per-attempt total is always exact; only the split within
-one model is an estimate. The defaults are off where a model's ratios differ (Opus 5.5 reads
-cost 0.05x input) and for long-context tiers: set `DIOXIDE_COST_RATIOS` (see
+one model is an estimate. The defaults are off where a model's prices have other ratios (Opus 5.5
+cache reads cost 0.05x base input, not 0.1x) and where the price depends on the request (fast
+mode, regional or long-context pricing): set `DIOXIDE_COST_RATIOS` (see
 [Configuration](configuration.md)) to match your models. Null when the attempt has no
-per-model breakdown or the stage was not measured (completed before this version). Steps mirrored before this version get their numbers from
-`repair-usage` (from the run-store copy of the run file). `/tasks/{id}/graph` returns
+per-model breakdown or the stage was not measured (it completed before 0.2.0).
+
+`/tasks/{id}/graph` returns
 `{"nodes", "edges"}` in the field names of Grafana's Node Graph panel (`id`, `title`,
 `subTitle`, `mainStat`, `secondaryStat`; edges `id`, `source`, `target`, `mainStat` = `next`,
 `retry` or `gate`). Steps are grouped into waves by time overlap (in start order, a step joins
 the wave when it starts strictly before the wave's latest finish; a running step stays open,
 an interrupted one ends at its last progress; steps never started form a last wave), so
 parallel reviews share a wave; `next` links every step of a wave to every step of the next.
-`retry` links `X@aN` to `X@aN+1` (`X` to `X@a1`; the suffix is the answer epoch, so a jump of
-more than one answer has no `retry` edge), `gate` links the asking step to each
+`retry` links `X@aN` to `X@aN+1` (`X` to `X@a1`; the suffix counts the answers given so far, so
+`plan` → `plan@a1` after the first answer has a `retry` edge, but `plan` → `plan@a2`, when the
+first answer was unclear and only the second re-planned, has none), `gate` links the asking step to each
 `interpret-<ask>-<k>` (for a review round, every reviewer step of that round);
 either replaces a `next` edge between the same pair, so edge ids stay unique.
 

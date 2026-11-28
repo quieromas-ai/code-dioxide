@@ -12,8 +12,10 @@ All notable changes to code-dioxide. The format follows
   validates `status` (400 on an unknown value). A misspelled filter used to return unfiltered rows.
   An empty value (`?status=`) means no filter.
 - Lifecycle gates (tasks first launched on this release): `interpret-*` stages run without a
-  role on `DIOXIDE_SCRIPT_MODEL` (else the parent's model) instead of the planner role, so
-  `stage_agent` / `model` group-bys of those stages shift.
+  role on `DIOXIDE_SCRIPT_MODEL` instead of the planner role. With `DIOXIDE_SCRIPT_MODEL` unset
+  they run on the parent session's model (often Opus) instead of the planner's, which can cost
+  more: set `DIOXIDE_SCRIPT_MODEL` to a cheap model. `stage_agent` / `model` group-bys of those
+  stages shift.
 - `/api/v1/agents`: `last_active_at` includes the agent's lifecycle stage work (it can move
   later), and `status` is `busy` while one of its stages runs. New fields `stages_total`,
   `stage_tasks_total`, `running_stages`.

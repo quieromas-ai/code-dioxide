@@ -1,4 +1,5 @@
-"""Per-stage billed usage and estimated cost on the reporting routes; data shaped like d12a1e6f."""
+"""Per-stage billed usage and estimated cost on the reporting routes; synthetic data with the
+shape of a measured lifecycle run (three attempts, three models)."""
 
 import json
 from typing import Any
@@ -14,7 +15,7 @@ from tests.test_reports_content import plant_lifecycle
 
 pytestmark = pytest.mark.usefixtures("reports")
 T0 = 1_000_000.0
-# (attempt n, model, input, output, cache read, cache write, cost): d12a1e6f's attempt_models.
+# (attempt n, model, input, output, cache read, cache write, cost): the run's attempt_models.
 ATTEMPT_MODELS = [
     (1, "claude-opus-5-5", 34, 8439, 506409, 72212, 0.7092008),
     (3, "claude-haiku-5-5", 10, 1693, 69695, 48554, 0.0076137),

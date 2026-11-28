@@ -1,4 +1,4 @@
-"""The per-stage cost split (src/stage_cost.py); fixtures shaped like task d12a1e6f."""
+"""The per-stage cost split (src/stage_cost.py); fixtures with the shape of a measured run."""
 
 import math
 
@@ -25,7 +25,8 @@ def test_single_stage_without_parent_usage_is_exact() -> None:
 
 
 def test_parent_and_stage_on_one_model_is_allocated() -> None:
-    attempt = AttemptModel(34, 8439, 506409, 72212, 0.7092008)  # d12a1e6f attempt 1, opus
+    # Attempt 1 on opus: one stage plus the parent session.
+    attempt = AttemptModel(34, 8439, 506409, 72212, 0.7092008)
     result = split(
         attempt,
         {"plan": Tokens(26, 7820, 428316, 46231)},

@@ -141,7 +141,7 @@ def create_app(settings: Settings) -> FastAPI:
             if settings.script_model is None:
                 logger.info(
                     "script_model is not set: lifecycle setup, merge and interpret stages run on "
-                    "the parent session's model; set script_model for a cheaper one"
+                    "the parent session's model; set DIOXIDE_SCRIPT_MODEL for a cheaper one"
                 )
             try:
                 agents, roles = load_registry(settings, logger)
