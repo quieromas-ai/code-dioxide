@@ -450,7 +450,10 @@ async def finish_attempt(
                 update["error"] = error
             assert action is not None
             await engine_recovery.apply_decision(engine, db, current, action, update, pin)
-            data = {"n": attempt.n, "outcome": outcome.value, "status": status}
+            data = {
+                "n": attempt.n, "outcome": outcome.value, "status": status,
+                "cost_usd": share.cost_usd, "tokens": share.tokens,
+            }  # fmt: skip
             await engine._event(db, task_id, "attempt_finished", data)
         if clean:  # what a clean attempt left running stays running
             # File writes are not transactional: kept only once the clean exit is committed

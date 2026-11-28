@@ -30,7 +30,7 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
     "answer_not_applied": frozenset({"n", "k"}),
     "answered": frozenset({"k", "label", "mode", "source"}),
     "attempt_closed_at_boot": frozenset({"n", "status", "outcome", "reason"}),
-    "attempt_finished": frozenset({"n", "outcome", "status"}),
+    "attempt_finished": frozenset({"n", "outcome", "status", "cost_usd", "tokens"}),
     "attempt_started": frozenset({"n", "mode", "corrective", "cause"}),
     "auth_failed": frozenset({"n"}),
     "boot_recovered": frozenset({"n", "process", "action"}),
@@ -58,6 +58,10 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
     "similar_active_task": frozenset({"similar"}),
     "spawn_failed": frozenset(),
     "spawned": frozenset({"n"}),
+    "stage_finished": frozenset(
+        {"label", "agent_type", "model", "status", "started_at", "finished_at"}
+    ),
+    "stage_started": frozenset({"label", "agent_type", "model", "started_at"}),
     "submitted": frozenset({"agent"}),
     "sweep": frozenset({"policy", "trigger", "survivors_unconfirmed"}),
     "sweep_requeued": frozenset({"next_attempt_at", "streak"}),

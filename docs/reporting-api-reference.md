@@ -106,7 +106,9 @@ the `data` fields kept outside admin scope:
 | `submitted`, `deduplicated` | `agent` |
 | `attempt_started` | `n`, `mode`, `corrective`, `cause` (`answer`, `transient`, `corrective`, `stage_failed`, `rate_limited`, `rate_limited_fallback`, `fresh`; null on a first launch) |
 | `spawned`, `auth_failed` | `n` |
-| `attempt_finished` | `n`, `outcome`, `status` |
+| `attempt_finished` | `n`, `outcome`, `status`, `cost_usd`, `tokens` (the attempt's share) |
+| `stage_started` | `label`, `agent_type`, `model`, `started_at` (epoch s): a new stage or a restart; never for a replay from cache. `agent_type` / `model` are null before the stage's first progress entry, `started_at` of a restart before its transcript is readable |
+| `stage_finished` | `label`, `agent_type`, `model`, `status` (`completed`), `started_at`, `finished_at` (epoch s): a stage newly completed; never for a replay. A stage killed with its attempt has a `stage_started` and no `stage_finished` |
 | `attempt_closed_at_boot` | `n`, `status`, `outcome`, `reason` |
 | `retry_scheduled` | `n`, `why`, `at` (when due), `corrective`, `resumes`, `call_retries`, `stage_retries`, `rate_limit_waited_s` |
 | `fresh_start` | `n`, `session_id`, `previous`, `previous_run_id`, `plan_pinned`, `dropped_answers`, `resumes`, `call_retries`, `stage_retries`, `rate_limit_waited_s` |

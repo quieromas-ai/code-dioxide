@@ -327,9 +327,12 @@ async def _mirror(
     async with write_tx() as db:
         for step in steps:
             found = measured.get(step.label, Measured((None, None), None, None))
-            await _upsert(
-                db, task.id, attempt.n, step, rows.get(step.label), progress, git, found.times
+            row = rows.get(step.label)
+            written = await _upsert(
+                db, task.id, attempt.n, step, row, progress, git, found.times
             )  # fmt: skip
+            for type_, data in stage_events(step, row, written, found.times[0]):
+                await engine._event(db, task.id, type_, data)
             if found.usage is not None and step.agent_id is not None:
                 n = await stage_measure.attempt_at(db, task.id, found.ended, attempt.n)
                 at = stage_measure.StepRun(task.id, step.label, run_id, n)
@@ -435,7 +438,9 @@ async def _upsert(
     progress: list[dict[str, Any]],
     git: tuple[str | None, str | None],
     measured: tuple[float | None, float | None] = (None, None),
-) -> None:
+) -> dict[str, Any]:
+    """Upsert one step row; returns what the row now says (``cached``, ``started_at``,
+    ``finished_at``, ``agent_type``, ``model``) for the stage events."""
     # The started count left by earlier attempts is persisted, so `cached` stays right across
     # an engine restart: a completed step whose count did not grow in this attempt was replayed.
     if row is None:
@@ -491,6 +496,37 @@ async def _upsert(
             numbers.last_progress_at,
         ),
     )  # fmt: skip
+    return {
+        "cached": cached, "started_at": started_at, "finished_at": finished_at,
+        "agent_type": numbers.agent_type or (row or {}).get("agent_type"),
+        "model": numbers.model or (row or {}).get("model"),
+    }  # fmt: skip
+
+
+def stage_events(
+    step: journal.JournalStep,
+    row: dict[str, Any] | None,
+    written: dict[str, Any],
+    measured_start: float | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """``stage_started`` / ``stage_finished`` for a real status transition of ``step`` (its row
+    before this mirror tick is ``row``): a new label or a restart (its started count grew)
+    started; a step newly completed, or restarted and completed within one tick, finished. A
+    replay served from cache did not run: none. A restart's ``started_at`` is its transcript's
+    (``measured_start``), null until readable: the row still holds the previous run's."""
+    if written["cached"]:
+        return []
+    base = {"label": step.label, "agent_type": written["agent_type"], "model": written["model"]}
+    restarted = row is not None and step.started_count > int(row["started_count"])
+    started_at = measured_start if restarted else written["started_at"]
+    found: list[tuple[str, dict[str, Any]]] = []
+    if row is None or restarted:
+        found.append(("stage_started", {**base, "started_at": started_at}))
+    if step.status == "completed" and (row is None or restarted or row["status"] != "completed"):
+        finished = {"status": step.status, "started_at": started_at,
+                    "finished_at": written["finished_at"]}  # fmt: skip
+        found.append(("stage_finished", {**base, **finished}))
+    return found
 
 
 def _current(steps: list[journal.JournalStep]) -> journal.JournalStep | None:

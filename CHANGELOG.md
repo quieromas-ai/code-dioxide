@@ -25,6 +25,8 @@ All notable changes to code-dioxide. The format follows
   and `estimated_cost_usd` / `cost_basis` (the attempt's per-model cost split by token-class
   weights, `DIOXIDE_COST_RATIOS`) on `/tasks/{id}/stages` and `/metrics/stages`;
   `parent_overhead_tokens` / `parent_overhead_estimated_cost_usd` on `/tasks/{id}/attempts`.
+- Events `stage_started` / `stage_finished` (on real step transitions, never for a replay from
+  cache; visible to the reports token), and `cost_usd` / `tokens` on `attempt_finished`.
 - `files_changed` on `/tasks/{id}/stages/{label}/result`: the server's `git diff --name-status`
   since the previous completed step. Schema v11 (`step_models`, new `steps` columns).
 - `/metrics/reliability`: `resumes` split by cause (`answer_resumes`, `transient_resumes`,
