@@ -16,7 +16,7 @@ output kept on disk, so a crash, a rate limit or a server restart resumes the wo
 attempt instead of starting over. Everything that happened
 can be read through the API without shell access to the host.
 
-Status: alpha (0.1.0). The background service is macOS only.
+Status: alpha (0.2.0). The background service is macOS only.
 
 code-dioxide is an independent project, not affiliated with or endorsed by Anthropic. It runs
 Claude Code, which you install and log in to yourself.

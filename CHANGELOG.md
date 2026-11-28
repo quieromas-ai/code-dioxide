@@ -4,7 +4,7 @@ All notable changes to code-dioxide. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/) (0.x: a minor release may break).
 
-## Unreleased
+## 0.2.0 - 2026-11-28
 
 ### Breaking
 
@@ -14,6 +14,14 @@ All notable changes to code-dioxide. The format follows
 - Lifecycle gates (tasks first launched on this release): `interpret-*` stages run without a
   role on `DIOXIDE_SCRIPT_MODEL` (else the parent's model) instead of the planner role, so
   `stage_agent` / `model` group-bys of those stages shift.
+- `/api/v1/agents`: `last_active_at` includes the agent's lifecycle stage work (it can move
+  later), and `status` is `busy` while one of its stages runs. New fields `stages_total`,
+  `stage_tasks_total`, `running_stages`.
+- `/api/v1/tasks/{id}/graph`: `next` edges join waves of time-overlapping steps instead of
+  phase runs (fewer cross-phase edges; sequential steps of one phase are now linked); new edge
+  kind `gate` (ask → its interpret stages). Node and edge id formats are unchanged.
+- Database schema 9 → 11 on first start; 0.1.0 refuses the migrated database (see
+  [Upgrade](docs/upgrade.md): back it up first).
 
 ### Added
 
@@ -36,14 +44,6 @@ All notable changes to code-dioxide. The format follows
   its events.
 
 ### Changed
-
-- `/api/v1/tasks/{id}/graph`: `next` edges join waves of time-overlapping steps instead of
-  phase runs (fewer cross-phase edges; sequential steps of one phase are now linked); new edge
-  kind `gate` (ask → its interpret stages). Node and edge id formats are unchanged.
-
-- `/api/v1/agents`: `last_active_at` includes the agent's lifecycle stage work (it can move
-  later), and `status` is `busy` while one of its stages runs. New fields `stages_total`,
-  `stage_tasks_total`, `running_stages`.
 
 - Docs: reliability `resumes` (resumed launches, answers included) is not the recovery budget
   (`recovery.resumes` on a task).
