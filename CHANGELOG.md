@@ -21,3 +21,13 @@ All notable changes to code-dioxide. The format follows
 - Gate classification `unclear`: the human is asked again at the same gate. A task keeps the
   workflow copied at its first launch, so tasks paused across the upgrade are unaffected.
 - A start-up log line when `DIOXIDE_SCRIPT_MODEL` is unset.
+- `/metrics/reliability`: `resumes` split by cause (`answer_resumes`, `transient_resumes`,
+  `corrective_resumes`, `stage_failed_resumes`, `rate_limit_resumes`, `unattributed_resumes`;
+  they sum to `resumes`). Event `attempt_started` gains `cause`; `/tasks/{id}` gains
+  `attempts_by_mode`. Schema v10 (`tasks.resume_cause`); older history derives the cause from
+  its events.
+
+### Changed
+
+- Docs: reliability `resumes` (resumed launches, answers included) is not the recovery budget
+  (`recovery.resumes` on a task).

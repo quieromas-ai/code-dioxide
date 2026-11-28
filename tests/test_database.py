@@ -110,7 +110,7 @@ async def test_write_tx_cancellation_leaves_connection_usable(db_path: Path, tic
 async def test_user_version_set_on_new_db(db_path: Path) -> None:
     async with get_db().execute("PRAGMA user_version") as cur:
         row = await cur.fetchone()
-    assert row is not None and row[0] == SCHEMA_VERSION == 9
+    assert row is not None and row[0] == SCHEMA_VERSION == 10
     await init_db(db_path)  # an existing current-version DB opens fine
 
 
@@ -118,7 +118,10 @@ async def test_newer_user_version_rejected(tmp_path: Path) -> None:
     path = tmp_path / "future.db"
     with sqlite3.connect(path) as conn:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-    with pytest.raises(RuntimeError, match=r"schema version 10 is newer than this code \(9\)"):
+    with pytest.raises(
+        RuntimeError,
+        match=rf"schema version {SCHEMA_VERSION + 1} is newer than this code \({SCHEMA_VERSION}\)",
+    ):
         await init_db(path)
 
 
@@ -160,7 +163,7 @@ async def test_version_1_database_migrated(tmp_path: Path) -> None:
         assert "detail" in columns
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 9
+        assert row is not None and row[0] == SCHEMA_VERSION
         async with db.execute("SELECT task_id, n, outcome, detail FROM attempts") as cur:
             assert [tuple(r) for r in await cur.fetchall()] == [("t1", 1, "ok", None)]
         await init_db(path)  # reopening the migrated DB is a no-op
@@ -168,21 +171,21 @@ async def test_version_1_database_migrated(tmp_path: Path) -> None:
         await close_db()
 
 
-async def test_fresh_database_created_at_version_9(tmp_path: Path) -> None:
+async def test_fresh_database_created_at_current_version(tmp_path: Path) -> None:
     await init_db(tmp_path / "fresh.db")
     try:
         async with get_db().execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 9
+        assert row is not None and row[0] == SCHEMA_VERSION
     finally:
         await close_db()
 
 
-async def test_version_10_database_rejected(tmp_path: Path) -> None:
-    path = tmp_path / "v10.db"
+async def test_version_11_database_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "v11.db"
     with sqlite3.connect(path) as conn:
-        conn.execute("PRAGMA user_version = 10")
-    with pytest.raises(RuntimeError, match="schema version 10 is newer"):
+        conn.execute("PRAGMA user_version = 11")
+    with pytest.raises(RuntimeError, match="schema version 11 is newer"):
         await init_db(path)
 
 
@@ -241,7 +244,7 @@ async def test_v6_database_migrates_to_v7(tmp_path: Path) -> None:
         assert set(STAGE_COLUMNS) <= columns
         async with get_db().execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 9
+        assert row is not None and row[0] == SCHEMA_VERSION
         async with get_db().execute("SELECT stage_tokens FROM steps") as cur:
             assert [tuple(r) for r in await cur.fetchall()] == [(None,)]
     finally:
@@ -271,7 +274,38 @@ async def test_v7_and_v8_databases_migrate(
     try:
         async with get_db().execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 9
+        assert row is not None and row[0] == SCHEMA_VERSION
+    finally:
+        await close_db()
+    fresh = tmp_path / "fresh.db"
+    await init_db(fresh)
+    await close_db()
+    assert await _schema(path) == await _schema(fresh)
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0), reason="the fixture drops a column (SQLite 3.35+)"
+)
+async def test_v9_database_migrates_to_v10(tmp_path: Path) -> None:
+    """v10 adds tasks.resume_cause (NULL on existing rows: their causes are derived from events)
+    with its CHECK."""
+    path = tmp_path / "v9.db"
+    await init_db(path)
+    await close_db()
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE tasks DROP COLUMN resume_cause")
+        conn.execute(
+            "INSERT INTO tasks (id, status, created_at, updated_at) VALUES ('t1', 'queued', 1, 1)"
+        )
+        conn.execute("PRAGMA user_version = 9")
+    await init_db(path)
+    try:
+        async with get_db().execute("SELECT * FROM tasks") as cur:
+            task = Task.from_row(await cur.fetchone())  # type: ignore[arg-type]
+        assert (task.id, task.resume_cause) == ("t1", None)
+        with pytest.raises(sqlite3.IntegrityError):
+            await get_db().execute("UPDATE tasks SET resume_cause = 'bogus' WHERE id = 't1'")
+        await get_db().execute("UPDATE tasks SET resume_cause = 'answer' WHERE id = 't1'")
     finally:
         await close_db()
     fresh = tmp_path / "fresh.db"
@@ -299,7 +333,7 @@ async def test_version_2_database_migrated_to_3(tmp_path: Path) -> None:
         db = get_db()
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 9
+        assert row is not None and row[0] == SCHEMA_VERSION
         async with db.execute(
             "SELECT label, started_count, attempt, prev_started_count FROM steps"
         ) as cur:
@@ -336,7 +370,7 @@ async def test_version_3_database_migrated_to_4(tmp_path: Path) -> None:
         db = get_db()
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 9
+        assert row is not None and row[0] == SCHEMA_VERSION
         async with db.execute("SELECT * FROM tasks") as cur:
             task = Task.from_row(await cur.fetchone())  # type: ignore[arg-type]
         assert (task.resumes, task.stage_retries, task.corrective) == (2, 0, 0)
@@ -394,7 +428,7 @@ async def test_version_4_database_migrated_to_5(tmp_path: Path) -> None:
         db = get_db()
         async with db.execute("PRAGMA user_version") as cur:
             row = await cur.fetchone()
-        assert row is not None and row[0] == 9
+        assert row is not None and row[0] == SCHEMA_VERSION
         async with db.execute("SELECT * FROM tasks") as cur:
             task = Task.from_row(await cur.fetchone())  # type: ignore[arg-type]
         assert (task.id, task.resumes) == ("t1", 2)

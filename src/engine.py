@@ -485,7 +485,9 @@ class TaskEngine:
                 "stderr_path, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (task.id, n, session_id, json.dumps(argv), str(stream_path), str(stderr_path), now),
             )
-            started = {"n": n, "mode": mode, "corrective": bool(task.corrective)}
+            # cause: why this launch resumes or restarts (tasks.RESUME_CAUSES); none on a first
+            cause = task.resume_cause if mode != "first" else None
+            started = {"n": n, "mode": mode, "corrective": bool(task.corrective), "cause": cause}
             await self._event(db, task.id, "attempt_started", started)
         call = expected_call(claimed, mode) if claimed.is_lifecycle else None
         return Attempt(claimed, mode, n, argv, stream_path, stderr_path, now, call=call)

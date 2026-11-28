@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from src import engine_lifecycle, engine_read, engine_recovery, engine_watch
+from src import engine_lifecycle, engine_read, engine_recovery, engine_watch, recovery
 from src.classify import Outcome
 from src.config import Settings
 from src.database import write_tx
@@ -40,7 +40,7 @@ from src.recovery import (
     plan_pin,
     task_update,
 )
-from src.tasks import LATE_PARENT_TOOL, Task
+from src.tasks import LATE_PARENT_TOOL, RESUME_CAUSES, Task
 from tests.helpers import Env, rows, stub_log, submit, task_row, wait_for, wait_status
 from tests.test_engine_lifecycle import (
     ENDED,
@@ -154,15 +154,18 @@ def test_transient_backoff_cap(settings: Settings) -> None:
     )
     update = task_update(decide(settings, Outcome.transient, resumes=1), table_task(), NOW, "n")
     assert update == {
-        "status": "queued", "error": None, "resume_mode": "resume", "next_attempt_at": NOW + 60,
-        "corrective": 0, "resumes": 2, "call_retries": 0, "stage_retries": 0,
-        "rate_limit_waited_s": 0.0,
+        "status": "queued", "error": None, "resume_mode": "resume", "resume_cause": "transient",
+        "next_attempt_at": NOW + 60, "corrective": 0, "resumes": 2, "call_retries": 0,
+        "stage_retries": 0, "rate_limit_waited_s": 0.0,
     }  # fmt: skip
-    # An attempt that never spawned repeats its own mode (no session to resume yet).
+    # An attempt that never spawned repeats its own mode (no session to resume yet); a resumed
+    # relaunch takes this action's cause, a repeated first launch keeps none.
     unspawned = table_task(pid=None, resume_mode="first")
-    assert task_update(decide(settings, Outcome.transient), unspawned, NOW, "n")["resume_mode"] == (
-        "first"
-    )
+    first = task_update(decide(settings, Outcome.transient), unspawned, NOW, "n")
+    assert (first["resume_mode"], first["resume_cause"]) == ("first", None)
+    answered = table_task(pid=None, resume_mode="resume", resume_cause="answer")
+    again = task_update(decide(settings, Outcome.transient), answered, NOW, "n")
+    assert (again["resume_mode"], again["resume_cause"]) == ("resume", "transient")
 
 
 def test_rate_limit_not_counted_capped(settings: Settings) -> None:
@@ -380,6 +383,7 @@ async def test_call_mismatch_two_retries_corrective_prompt(
     assert [e["why"] for e in await event_data(task_id, "retry_scheduled")] == ["corrective"] * 2
     started = await event_data(task_id, "attempt_started")
     assert [e["corrective"] for e in started] == [False, True, True]
+    assert [e["cause"] for e in started] == [None, "corrective", "corrective"]
 
 
 async def kill_in_implement(env: Env, task_id: str) -> Task:
@@ -433,6 +437,13 @@ async def test_fresh_pins_plan_same_branch_new_session(
     assert (fresh["previous_run_id"], fresh["plan_pinned"]) == (before.run_id, True)
     assert (fresh["dropped_answers"], fresh["note"]) == (0, None)
     assert task.resumes == 2  # the stall resume and the fresh start
+    # Budget used (2) = transient resumes (1) + fresh restarts (1); mode=resume launches: 1.
+    started = await event_data(task_id, "attempt_started")
+    assert [(e["mode"], e["cause"]) for e in started] == [
+        ("first", None), ("resume", "transient"), ("fresh", "fresh"),
+    ]  # fmt: skip
+    assert task.resume_cause == "fresh"
+    assert st["attempts_by_mode"] == {"first": 1, "resume": 1, "fresh": 1}
 
     _, refused, relaunched = launches(env)
     assert flag(refused, "--resume") == before.session_id
@@ -1303,3 +1314,9 @@ async def test_auth_failure_is_terminal_one_attempt(
     assert attempt["outcome"] == "auth_failed"
     await env.engine.stop()
     assert len(launches(env)) == 1
+
+
+def test_every_resume_why_is_a_resume_cause() -> None:
+    whys = {recovery.TRANSIENT, recovery.RATE_LIMITED, recovery.RATE_LIMITED_FALLBACK,
+            recovery.STAGE_FAILED, recovery.CORRECTIVE}  # fmt: skip
+    assert whys | {"answer", "fresh"} == set(RESUME_CAUSES)

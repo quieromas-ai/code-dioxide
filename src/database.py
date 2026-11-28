@@ -10,8 +10,13 @@ from pathlib import Path
 import aiosqlite
 
 from src.serverlog import LOGGER_NAME
+from src.tasks import RESUME_CAUSES
 
-SCHEMA = """
+RESUME_CAUSE_DECL = (
+    "TEXT CHECK (resume_cause IN (" + ", ".join(f"'{c}'" for c in RESUME_CAUSES) + "))"
+)
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     agent TEXT,
@@ -47,7 +52,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at REAL,
     completed_at REAL,
     updated_at REAL NOT NULL,
-    model_fallback_applied INTEGER NOT NULL DEFAULT 0
+    model_fallback_applied INTEGER NOT NULL DEFAULT 0,
+    -- why the next launch resumes or restarts (tasks.RESUME_CAUSES); NULL before any
+    resume_cause {RESUME_CAUSE_DECL}
 );
 
 CREATE TABLE IF NOT EXISTS attempts (
@@ -157,7 +164,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_completed_at ON tasks (completed_at);
 """
 
 # Bump on every schema change and migrate in `_check_version`.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 STAGE_COLUMNS = (
     ("agent_type", "TEXT"), ("model", "TEXT"), ("stage_tokens", "INTEGER"),
     ("tool_calls", "INTEGER"), ("last_tool", "TEXT"), ("duration_s", "REAL"),
@@ -270,6 +277,8 @@ async def _check_version(conn: aiosqlite.Connection) -> None:
             await _add_column(conn, "steps", column, decl)
     # v8: attempt_models; v9: summaries, summary_runs (created by SCHEMA's CREATE TABLE IF NOT
     # EXISTS)
+    if 1 <= version < 10:  # v10: tasks.resume_cause (reliability resume causes)
+        await _add_column(conn, "tasks", "resume_cause", RESUME_CAUSE_DECL)
     if version < SCHEMA_VERSION:
         await conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 

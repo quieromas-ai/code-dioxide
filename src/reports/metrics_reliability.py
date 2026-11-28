@@ -5,6 +5,16 @@ Each figure counts at the time of its own fact: ``submitted`` at task creation, 
 ``killed``) at the attempt's end (the open attempt now, ``partial``), event counts at the event.
 So per bucket ``attempts`` = first attempts + ``resumes`` + ``fresh_restarts``, and equals the
 ``attempts`` of ``/metrics/usage``.
+
+``resumes`` counts attempts launched with ``mode=resume``, split by cause (identity, per bucket):
+``resumes = answer_resumes + transient_resumes + corrective_resumes + stage_failed_resumes +
+rate_limit_resumes + unattributed_resumes`` (``rate_limit_resumes``: ``rate_limited`` and
+``rate_limited_fallback``; ``unattributed_resumes``: an event written before ``cause`` existed
+with no ``answered`` / ``retry_scheduled`` before it to derive one from, normally 0).
+It is not the task's recovery budget (``recovery.resumes``): an answer resume uses none, a fresh
+restart uses one, and a sweep re-queue or a retry cancelled before launch makes the two differ.
+``call_retries`` / ``stage_retries`` count ``retry_scheduled`` events at the event;
+``corrective_resumes`` / ``stage_failed_resumes`` count claimed attempts at their end.
 """
 
 import time
@@ -13,17 +23,36 @@ from typing import Any
 import aiosqlite
 
 from src.engine import TaskEngine
-from src.recovery import CORRECTIVE, KILL_REASONS, STAGE_FAILED
+from src.recovery import (
+    CORRECTIVE,
+    KILL_REASONS,
+    RATE_LIMITED,
+    RATE_LIMITED_FALLBACK,
+    STAGE_FAILED,
+    TRANSIENT,
+)
 from src.reports.aggregate import Contribution, aggregate
-from src.reports.metrics_usage import open_attempt_rows, task_keys
+from src.reports.metrics_usage import (
+    attempt_cause_sql,
+    attempt_mode_sql,
+    open_attempt_rows,
+    task_keys,
+)
 from src.reports.query import Bucket, Filters, where
+from src.tasks import CAUSE_ANSWER
 
 GROUP_BY = ("agent", "project", "kind")
 COLUMNS = (
     "submitted", "completed", "failed", "cancelled", "attempts", "call_retries", "stage_retries",
-    "resumes", "fresh_restarts", "tasks_with_fallback", "killed", "auth_failed",
-    "permission_denied",
+    "resumes", "answer_resumes", "transient_resumes", "corrective_resumes",
+    "stage_failed_resumes", "rate_limit_resumes", "unattributed_resumes", "fresh_restarts",
+    "tasks_with_fallback", "killed", "auth_failed", "permission_denied",
 )  # fmt: skip
+_CAUSE_COLUMNS = {
+    CAUSE_ANSWER: "answer_resumes", TRANSIENT: "transient_resumes",
+    CORRECTIVE: "corrective_resumes", STAGE_FAILED: "stage_failed_resumes",
+    RATE_LIMITED: "rate_limit_resumes", RATE_LIMITED_FALLBACK: "rate_limit_resumes",
+}  # fmt: skip
 _OUTCOMES = ("completed", "failed", "cancelled")
 _EVENT_COLUMNS = {"auth_failed": "auth_failed", "permission_denied": "permission_denied"}
 _RETRY_COLUMNS = {CORRECTIVE: "call_retries", STAGE_FAILED: "stage_retries"}
@@ -31,10 +60,12 @@ _MODE_COLUMNS = {"resume": "resumes", "fresh": "fresh_restarts"}
 _TASK_COLUMNS = "t.agent, t.cwd, t.kind, t.status"
 
 
-def _attempt_values(mode: str | None, reason: str | None) -> dict[str, int]:
+def _attempt_values(mode: str | None, cause: str | None, reason: str | None) -> dict[str, int]:
     values = {"attempts": 1, "killed": int(reason in KILL_REASONS)}
     if mode in _MODE_COLUMNS:
         values[_MODE_COLUMNS[mode]] = 1
+    if mode == "resume":
+        values[_CAUSE_COLUMNS.get(cause or "", "unattributed_resumes")] = 1
     return values
 
 
@@ -60,17 +91,15 @@ async def contributions(
     cond, args = where(filters, time_column="a.ended_at")
     async with db.execute(
         f"SELECT a.task_id, a.ended_at, a.reason, {_TASK_COLUMNS}, "
-        "(SELECT json_extract(e.data_json, '$.mode') FROM events e WHERE e.task_id = a.task_id "
-        "AND e.type = 'attempt_started' AND json_extract(e.data_json, '$.n') = a.n "
-        "ORDER BY e.id DESC LIMIT 1) AS mode "
+        f"{attempt_mode_sql('a')} AS mode, {attempt_cause_sql('a')} AS cause "
         f"FROM attempts a JOIN tasks t ON t.id = a.task_id WHERE a.ended_at IS NOT NULL AND {cond}",
         args,
     ) as cur:
         for r in await cur.fetchall():
-            values = _attempt_values(r["mode"], r["reason"])
+            values = _attempt_values(r["mode"], r["cause"], r["reason"])
             found.append(Contribution(r["ended_at"], r["task_id"], task_keys(r), values))
     for row in await open_attempt_rows(db, filters, now):
-        values = _attempt_values(row["mode"], None)
+        values = _attempt_values(row["mode"], row["cause"], None)
         found.append(Contribution(now, row["id"], task_keys(row), values, partial=True))
     found += await _event_contributions(db, filters)
     return found

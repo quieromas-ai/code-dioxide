@@ -39,7 +39,7 @@ from typing import Any, assert_never
 from src.classify import Outcome
 from src.config import Settings
 from src.journal import JournalStep
-from src.tasks import RETURN_DECIDES, Task
+from src.tasks import CAUSE_FRESH, RETURN_DECIDES, Task
 
 CANCEL = "cancel"
 STALL = "stall"  # set by the watchdog (no activity for stall_timeout_s)
@@ -254,7 +254,9 @@ def task_update(action: Action, task: Task, now: float, new_session_id: str) -> 
     """The ``tasks`` columns for ``action`` (``new_session_id`` is used only by ``Fresh``).
 
     A resume of an attempt that never spawned (no pid stored) repeats that attempt's mode: no
-    session exists to resume yet."""
+    session exists to resume yet. Its cause is this action's ``why`` whenever the relaunch
+    resumes (so ``corrective`` and the cause agree); a repeated first or fresh launch keeps its
+    own."""
     if isinstance(action, Done):
         return {"status": action.status, "error": None, "completed_at": now, "corrective": 0}
     if isinstance(action, Fail):
@@ -262,9 +264,11 @@ def task_update(action: Action, task: Task, now: float, new_session_id: str) -> 
     if isinstance(action, WaitHuman):
         return {"status": "needs_human", "error": None, "corrective": 0}
     if isinstance(action, Resume):
-        mode = "resume" if task.pid is not None else (task.resume_mode or "first")
+        spawned = task.pid is not None
+        mode = "resume" if spawned else (task.resume_mode or "first")
         update = {
             "status": "queued", "error": None, "resume_mode": mode,
+            "resume_cause": action.why if mode == "resume" else task.resume_cause,
             "next_attempt_at": action.at, "corrective": int(action.corrective),
             **_counter_columns(action.counters),
         }  # fmt: skip
@@ -273,7 +277,7 @@ def task_update(action: Action, task: Task, now: float, new_session_id: str) -> 
         return update
     if isinstance(action, Fresh):
         return {
-            "status": "queued", "error": None, "resume_mode": "fresh",
+            "status": "queued", "error": None, "resume_mode": "fresh", "resume_cause": CAUSE_FRESH,
             "session_id": new_session_id, "run_id": None, "next_attempt_at": None,
             "corrective": 0, **_counter_columns(action.counters),
         }  # fmt: skip

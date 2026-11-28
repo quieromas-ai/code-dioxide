@@ -137,17 +137,45 @@ def _split(
     return found
 
 
+def _started_event(alias: str, what: str) -> str:
+    """``what`` of attempt ``alias``'s ``attempt_started`` event (the latest for that n)."""
+    return (
+        f"(SELECT {what} FROM events s WHERE s.task_id = {alias}.task_id "
+        f"AND s.type = 'attempt_started' AND json_extract(s.data_json, '$.n') = {alias}.n "
+        "ORDER BY s.id DESC LIMIT 1)"
+    )
+
+
+def attempt_mode_sql(alias: str) -> str:
+    """SQL for attempt ``alias``'s launch mode (``first``, ``resume``, ``fresh``)."""
+    return _started_event(alias, "json_extract(s.data_json, '$.mode')")
+
+
+def attempt_cause_sql(alias: str) -> str:
+    """SQL for why attempt ``alias`` was launched (``tasks.RESUME_CAUSES``): the
+    ``attempt_started`` event's ``cause``; for events written before it existed, derived from
+    the last ``answered`` (``answer``) or ``retry_scheduled`` (its ``why``) before that event (a
+    ``sweep_requeued`` in between is not a cause: the re-queued launch inherits). Only derived
+    for a ``resume`` launch; NULL when nothing precedes it."""
+    derived = (
+        "(SELECT CASE p.type WHEN 'answered' THEN 'answer' "
+        "ELSE json_extract(p.data_json, '$.why') END FROM events p "
+        f"WHERE p.task_id = {alias}.task_id AND p.type IN ('answered', 'retry_scheduled') "
+        f"AND p.id < {_started_event(alias, 's.id')} ORDER BY p.id DESC LIMIT 1)"
+    )
+    stored = _started_event(alias, "json_extract(s.data_json, '$.cause')")
+    return f"coalesce({stored}, CASE WHEN {attempt_mode_sql(alias)} = 'resume' THEN {derived} END)"
+
+
 async def open_attempt_rows(db: aiosqlite.Connection, filters: Filters, now: float) -> list[Any]:
-    """Running tasks' open attempts (task keys, ``n``, ``started_at``, ``mode``) without reading
-    their streams; none when the window ends before now."""
+    """Running tasks' open attempts (task keys, ``n``, ``started_at``, ``mode``, ``cause``)
+    without reading their streams; none when the window ends before now."""
     if not in_window(filters, now):
         return []
     cond, args = where(filters, time_column=None)
     async with db.execute(
         "SELECT t.id, t.agent, t.cwd, t.kind, t.status, a.n, a.started_at, "
-        "(SELECT json_extract(e.data_json, '$.mode') FROM events e WHERE e.task_id = a.task_id "
-        "AND e.type = 'attempt_started' AND json_extract(e.data_json, '$.n') = a.n "
-        "ORDER BY e.id DESC LIMIT 1) AS mode "
+        f"{attempt_mode_sql('a')} AS mode, {attempt_cause_sql('a')} AS cause "
         "FROM tasks t JOIN attempts a ON a.task_id = t.id AND a.ended_at IS NULL "
         "AND a.n = (SELECT max(n) FROM attempts o WHERE o.task_id = t.id AND o.ended_at IS NULL) "
         f"WHERE {cond} AND t.status = 'running'",

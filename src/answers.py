@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.database import write_tx
 from src.engine_lifecycle import answer_mode
-from src.tasks import Task
+from src.tasks import CAUSE_ANSWER, Task
 
 if TYPE_CHECKING:
     from src.engine import TaskEngine
@@ -72,11 +72,12 @@ async def answer(engine: "TaskEngine", task_id: str, text: Any, source: str) -> 
             return {"task_id": task_id, "status": task.status, "error": error}
         now = time.time()
         await db.execute(
-            "UPDATE tasks SET status = 'queued', resume_mode = 'resume', args_json = ?, "
+            "UPDATE tasks SET status = 'queued', resume_mode = 'resume', resume_cause = ?, "
+            "args_json = ?, "
             "question_json = NULL, output_json = NULL, error = NULL, completed_at = NULL, "
             "next_attempt_at = NULL, updated_at = ? "
             "WHERE id = ? AND status = 'needs_human' AND attempt = ?",
-            (args_json, now, task.id, task.attempt),
+            (CAUSE_ANSWER, args_json, now, task.id, task.attempt),
         )
         await db.execute(
             "INSERT INTO answers (task_id, k, label, mode, question, answer, source, at) "

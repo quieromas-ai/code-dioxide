@@ -31,7 +31,7 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
     "answered": frozenset({"k", "label", "mode", "source"}),
     "attempt_closed_at_boot": frozenset({"n", "status", "outcome", "reason"}),
     "attempt_finished": frozenset({"n", "outcome", "status"}),
-    "attempt_started": frozenset({"n", "mode", "corrective"}),
+    "attempt_started": frozenset({"n", "mode", "corrective", "cause"}),
     "auth_failed": frozenset({"n"}),
     "boot_recovered": frozenset({"n", "process", "action"}),
     "cancelled": frozenset({"from"}),

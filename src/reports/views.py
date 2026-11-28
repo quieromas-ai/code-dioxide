@@ -16,7 +16,8 @@ LIST_ROW_KEYS = (
 STATUS_KEYS = (
     "task_id", "status", "started_at", "completed_at", "stage", "steps", "running_steps",
     "resumes", "session_id", "run_id", "cost_usd", "cost_partial", "tokens_used", "waiting",
-    "kill_reason", "recovery", "uncounted_attempts", "cost_complete", "output",
+    "kill_reason", "recovery", "attempts_by_mode", "uncounted_attempts", "cost_complete",
+    "output",
 )  # fmt: skip
 OUTPUT_KEYS = ("tokens_used", "cost_usd")
 STEP_KEYS = (

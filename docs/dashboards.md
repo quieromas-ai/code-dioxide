@@ -38,7 +38,7 @@ a few days and `bucket=day` beyond; more than 5000 rows is refused.
 | Total dioxide spend | `/metrics/usage` + `/metrics/overhead` (no bucket) | sum of both `cost_usd` |
 | Throughput | `/metrics/reliability?bucket=day` | `submitted`, `completed`, `failed`, `cancelled` |
 | Failure rate per agent | `/metrics/reliability?group_by=agent` | `failed / (completed + failed + cancelled)` (Grafana transformation **Add field from calculation**) |
-| Recovery work | `/metrics/reliability?bucket=day` | `resumes`, `fresh_restarts`, `call_retries`, `stage_retries`, `killed` |
+| Recovery work | `/metrics/reliability?bucket=day` | `resumes` (or its causes: `answer_resumes`, `transient_resumes`, ...), `fresh_restarts`, `call_retries`, `stage_retries`, `killed` |
 | Where time goes | `/metrics/time?group_by=agent` | `queued_s`, `running_s`, `human_wait_s`, `rate_limit_wait_s`, `backoff_wait_s` (stacked bar) |
 | Typical task duration | `/metrics/time?stat=p50` and `stat=p90` | `running_s` per agent |
 | Heaviest stages | `/metrics/stages?group_by=stage` | `stage_tokens`, `duration_s`, `tool_calls`, `runs` (table) |
@@ -66,7 +66,9 @@ Use a dashboard variable for `agent`, `project` or `task` and add it as a query 
 - **`partial: true`** rows include a running attempt's interim figures and change until it
   ends.
 - **Reliability identity:** per bucket `attempts` = first attempts + `resumes` +
-  `fresh_restarts`, and equals usage `attempts`.
+  `fresh_restarts`, and equals usage `attempts`; `resumes` = `answer_resumes` +
+  `transient_resumes` + `corrective_resumes` + `stage_failed_resumes` + `rate_limit_resumes` +
+  `unattributed_resumes`. `resumes` is not the recovery budget (a task's `recovery.resumes`).
 
 ## A custom web page
 

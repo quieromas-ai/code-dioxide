@@ -129,6 +129,15 @@ async def test_gate_answer_resumes_same_session_full_call(
     final = await task_row(task_id)
     assert (final.session_id, final.run_id) == (first.session_id, first.run_id)
     assert final.question_json is None and final.args_dict["answers"] == [answer]
+    # An answer resume is a resumed launch but uses no recovery budget.
+    assert (final.resumes, final.resume_cause) == (0, "answer")
+    assert st["recovery"]["resumes"]["used"] == 0
+    assert st["attempts_by_mode"] == {"first": 1, "resume": 1, "fresh": 0}
+    started = await rows(
+        "SELECT data_json FROM events WHERE task_id = ? AND type = 'attempt_started' ORDER BY id",
+        task_id,
+    )
+    assert [json.loads(r["data_json"])["cause"] for r in started] == [None, "answer"]
     answer_file = first.run_dir / "inputs" / "answers" / "1.md"
     assert answer_file.read_text() == "Approved, use blue" and mode(answer_file) == 0o444
     (row,) = await rows("SELECT * FROM answers WHERE task_id = ?", task_id)

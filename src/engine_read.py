@@ -79,7 +79,23 @@ async def status(engine: "TaskEngine", task_id: str) -> dict[str, Any]:
         "waiting": waiting,
         "kill_reason": task.kill_reason,
         "recovery": _recovery(engine, task, waiting, ended_wait=ended_wait),
+        "attempts_by_mode": await _attempts_by_mode(db, task.id),
     }
+
+
+async def _attempts_by_mode(db: aiosqlite.Connection, task_id: str) -> dict[str, int]:
+    """Claimed attempts per mode (``attempt_started`` events, a sweep re-queue's unspawned one
+    included): ``resume`` counts answer resumes too, unlike ``recovery.resumes`` (the budget)."""
+    counts = dict.fromkeys(("first", "resume", "fresh"), 0)
+    async with db.execute(
+        "SELECT json_extract(data_json, '$.mode') AS mode, count(*) AS n FROM events "
+        "WHERE task_id = ? AND type = 'attempt_started' GROUP BY mode",
+        (task_id,),
+    ) as cur:
+        for r in await cur.fetchall():
+            if r["mode"] in counts:
+                counts[r["mode"]] = int(r["n"])
+    return counts
 
 
 async def task_usage(

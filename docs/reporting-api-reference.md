@@ -34,6 +34,7 @@ Units: `*_usd` US dollars (list prices), `*_s` seconds, `*tokens*` tokens, times
 | `completed`, `failed`, `cancelled` | tasks reaching that status, at `completed_at` |
 | `attempts` | attempts ended (plus open ones) = first attempts + `resumes` + `fresh_restarts`; equals usage `attempts` |
 | `resumes`, `fresh_restarts` | attempts started by resuming the session / by a fresh session |
+| `answer_resumes`, `transient_resumes`, `corrective_resumes`, `stage_failed_resumes`, `rate_limit_resumes`, `unattributed_resumes` | `resumes` by cause (`attempt_started.cause`); they sum to `resumes`. `rate_limit_resumes` covers `rate_limited` and `rate_limited_fallback`; `unattributed_resumes` counts old events (written before `cause`) with nothing to derive a cause from, normally 0. `resumes` is not the recovery budget (`recovery.resumes` on `/tasks/{id}`): answers use none, fresh restarts use one, sweep re-queues and retries cancelled before launch make them differ. `corrective_resumes` / `stage_failed_resumes` count claimed attempts at their end, `call_retries` / `stage_retries` the scheduling events |
 | `call_retries` | corrective retries after the parent miscalled the workflow (`retry_scheduled`, `why: corrective`) |
 | `stage_retries` | retries after a stage failed (`why: stage_failed`) |
 | `tasks_with_fallback` | tasks at their first `model_fallback` |
@@ -56,8 +57,10 @@ characters), `error`, `branch`, `worktree`. **`/tasks/{id}`** for the reports to
 `status`, `started_at`, `completed_at`, `stage`, `steps` (`label`, `phase`, `status`,
 `started_count`, `cached`, `agent_id`, `started_at`, `finished_at`, `timing`), `running_steps`,
 `resumes`, `session_id`, `run_id`, `cost_usd`, `cost_partial`, `tokens_used`, `waiting`,
-`kill_reason`, `recovery`, `uncounted_attempts`, `cost_complete`, `output` (`tokens_used`,
-`cost_usd`).
+`kill_reason`, `recovery` (`recovery.resumes` is the recovery budget used: transient resumes
+and fresh restarts, never answers), `attempts_by_mode` (`first`, `resume`, `fresh`: claimed
+attempts, answer resumes included), `uncounted_attempts`, `cost_complete`, `output`
+(`tokens_used`, `cost_usd`).
 
 **`/tasks/{id}/attempts` rows**: `n`, `session_id`, `mode` (`first`, `resume`, `fresh`),
 `started_at`, `ended_at`, `outcome` (`success`, `needs_human`, `cancelled_by_workflow`,
@@ -87,7 +90,7 @@ the `data` fields kept outside admin scope:
 | Type | `data` outside admin |
 |---|---|
 | `submitted`, `deduplicated` | `agent` |
-| `attempt_started` | `n`, `mode`, `corrective` |
+| `attempt_started` | `n`, `mode`, `corrective`, `cause` (`answer`, `transient`, `corrective`, `stage_failed`, `rate_limited`, `rate_limited_fallback`, `fresh`; null on a first launch) |
 | `spawned`, `auth_failed` | `n` |
 | `attempt_finished` | `n`, `outcome`, `status` |
 | `attempt_closed_at_boot` | `n`, `status`, `outcome`, `reason` |

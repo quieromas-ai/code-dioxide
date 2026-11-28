@@ -10,6 +10,15 @@ from typing import Any, Self
 KIND_LIFECYCLE = "lifecycle"
 KIND_SINGLE = "single"
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
+# Why a launch resumes the session or restarts it fresh (``tasks.resume_cause``, the
+# ``attempt_started`` event's ``cause``): an answer, a decider ``Resume.why``
+# (``recovery.TRANSIENT`` ... ``recovery.CORRECTIVE``) or a ``Fresh`` restart.
+CAUSE_ANSWER = "answer"
+CAUSE_FRESH = "fresh"
+RESUME_CAUSES = (
+    CAUSE_ANSWER, "transient", "corrective", "stage_failed", "rate_limited",
+    "rate_limited_fallback", CAUSE_FRESH,
+)  # fmt: skip
 # A caller waiting on a task (prompt_agent, log followers) stops at these: a task waiting in
 # needs_human writes nothing more until it is answered and resumed.
 WAIT_ENDS = TERMINAL | {"needs_human"}
@@ -90,6 +99,7 @@ class Task:
     completed_at: float | None
     updated_at: float
     model_fallback_applied: int = 0  # 1: the task's agents files carry settings.model_fallback
+    resume_cause: str | None = None  # why the next launch resumes or restarts (RESUME_CAUSES)
 
     @classmethod
     def from_row(cls, row: sqlite3.Row | Mapping[str, Any]) -> Self:

@@ -49,3 +49,68 @@ async def test_reliability_counts(reports: Env) -> None:
         "tasks_with_fallback": 1, "killed": 1, "auth_failed": 1, "permission_denied": 1,
     }  # fmt: skip
     assert (await get(reports, "?group_by=status")).status_code == 400
+
+
+CAUSE_COLUMNS = (
+    "answer_resumes", "transient_resumes", "corrective_resumes", "stage_failed_resumes",
+    "rate_limit_resumes", "unattributed_resumes",
+)  # fmt: skip
+
+
+def _identity_holds(row: dict[str, int]) -> bool:
+    return row["resumes"] == sum(row[c] for c in CAUSE_COLUMNS)
+
+
+async def _attempt(task_id: str, n: int, at: float, started: dict[str, object]) -> None:
+    await insert_event(task_id, "attempt_started", {"n": n, **started}, at)
+    await insert_attempt(task_id, n, ended_at=at + 1, reason="clean_exit")
+
+
+async def test_reliability_derives_cause_of_old_events(reports: Env) -> None:
+    """Events written before ``cause`` existed: the cause comes from the event before."""
+    await plant()
+    (row,) = (await get(reports, "")).json()["rows"]
+    assert {c: row[c] for c in CAUSE_COLUMNS} == {
+        "answer_resumes": 0, "transient_resumes": 0, "corrective_resumes": 1,
+        "stage_failed_resumes": 0, "rate_limit_resumes": 0, "unattributed_resumes": 0,
+    }  # fmt: skip
+    assert _identity_holds(row)
+
+
+async def test_reliability_resume_causes(reports: Env) -> None:
+    await insert_task("t", status="completed", created_at=T0, completed_at=T0 + 100)
+    await _attempt("t", 1, T0 + 1, {"mode": "first", "cause": None})
+    for n, cause in enumerate(
+        ("answer", "transient", "corrective", "stage_failed", "rate_limited",
+         "rate_limited_fallback"),
+        start=2,
+    ):  # fmt: skip
+        await _attempt("t", n, T0 + 10 * n, {"mode": "resume", "cause": cause})
+    await _attempt("t", 8, T0 + 80, {"mode": "fresh", "cause": "fresh"})
+    (row,) = (await get(reports, "")).json()["rows"]
+    assert {c: row[c] for c in CAUSE_COLUMNS} == {
+        "answer_resumes": 1, "transient_resumes": 1, "corrective_resumes": 1,
+        "stage_failed_resumes": 1, "rate_limit_resumes": 2, "unattributed_resumes": 0,
+    }  # fmt: skip
+    assert (row["resumes"], row["fresh_restarts"], row["attempts"]) == (6, 1, 8)
+    assert _identity_holds(row)
+
+
+async def test_reliability_sweep_requeue_inherits_and_pruned_is_unattributed(reports: Env) -> None:
+    await insert_task("s", status="completed", created_at=T0, completed_at=T0 + 100)
+    await _attempt("s", 1, T0 + 1, {"mode": "first"})
+    await insert_event("s", "answered", {"k": 1, "label": "plan", "mode": "after"}, T0 + 5)
+    await _attempt("s", 2, T0 + 10, {"mode": "resume"})  # never spawned: swept, re-queued
+    await insert_event("s", "sweep_requeued", {"pids": [1]}, T0 + 12)
+    await _attempt("s", 3, T0 + 20, {"mode": "resume"})  # inherits the answer
+    # An old resume event with nothing before it to derive a cause from (hand-edited history).
+    await insert_task("p", status="completed", created_at=T0, completed_at=T0 + 100)
+    await _attempt("p", 2, T0 + 30, {"mode": "resume"})
+    (row,) = (await get(reports, "")).json()["rows"]
+    assert (row["answer_resumes"], row["unattributed_resumes"], row["resumes"]) == (2, 1, 3)
+    assert _identity_holds(row)
+    by_task = {}
+    for task_id in ("s", "p"):
+        (r,) = (await get(reports, f"?task={task_id}")).json()["rows"]
+        by_task[task_id] = r["unattributed_resumes"]
+    assert by_task == {"s": 0, "p": 1}  # 0 wherever the history survives
