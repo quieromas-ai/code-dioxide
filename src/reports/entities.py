@@ -19,6 +19,7 @@ from src.reports.query import (
     parse_limit,
     where,
 )
+from src.reports.stage_costs import task_costs
 
 
 class NotFound(LookupError):
@@ -48,7 +49,10 @@ def resolve_agent(engine: TaskEngine, name: str) -> str:
 
 
 async def attempts(
-    db: aiosqlite.Connection, task_id: str, params: Mapping[str, str]
+    db: aiosqlite.Connection,
+    task_id: str,
+    params: Mapping[str, str],
+    cost_ratios: Mapping[str, Mapping[str, float]],
 ) -> dict[str, Any]:
     async with db.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)) as cur:
         if await cur.fetchone() is None:
@@ -68,6 +72,7 @@ async def attempts(
     ) as cur:
         found = await cur.fetchall()
     uncounted = await usage.uncounted_attempt_keys(db, [task_id])
+    costs = await task_costs(db, [task_id], cost_ratios)
     rows = [
         {
             "n": r["n"], "session_id": r["session_id"], "mode": r["mode"],
@@ -77,6 +82,8 @@ async def attempts(
             "output_tokens": r["output_tokens"], "cache_read_tokens": r["cache_read_tokens"],
             "cache_write_tokens": r["cache_write_tokens"], "running_s": r["running_s"],
             "uncounted": (task_id, r["n"]) in uncounted,
+            "parent_overhead_tokens": costs.overhead_tokens.get((task_id, r["n"])),
+            "parent_overhead_estimated_cost_usd": costs.overhead_cost_usd.get((task_id, r["n"])),
         }
         for r in found
     ]  # fmt: skip

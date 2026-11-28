@@ -43,7 +43,11 @@ Units: `*_usd` US dollars (list prices), `*_s` seconds, `*tokens*` tokens, times
 
 **`/metrics/stages`**: `group_by` `stage`, `stage_agent`, `model`, `project`; columns
 `stage_tokens` (context size, not billed), `tool_calls`, `duration_s`, `runs`, `cached_runs`,
-`tasks` (see **Stages** in [Reporting API](reporting-api.md)).
+`billed_input_tokens`, `billed_output_tokens`, `billed_cache_read_tokens`,
+`billed_cache_write_tokens`, `turns` (billed, from the stage transcripts; a row replayed from
+cache keeps the measured run's), `estimated_cost_usd`, `cost_basis` (`exact` only if every summed stage is, null if any
+completed stage is unknown), `tasks` (see **Stages** and **Stage cost** in
+[Reporting API](reporting-api.md)).
 
 **`/metrics/savings`**: `group_by` `agent`, `project`, `stage`; columns `cached_stages`,
 `deduplicated_submissions`, `est_stage_tokens_saved` (see **Savings** in [Reporting API](reporting-api.md)).
@@ -66,12 +70,17 @@ attempts, answer resumes included), `uncounted_attempts`, `cost_complete`, `outp
 `started_at`, `ended_at`, `outcome` (`success`, `needs_human`, `cancelled_by_workflow`,
 `rate_limited`, `transient`, `stage_failed`, `resume_refused`, `call_mismatch`,
 `parent_violation`, `auth_failed`, `fatal`), `reason` (the kill reason, if killed),
-`cost_usd`, `tokens`, the four token columns, `running_s`, `uncounted`.
+`cost_usd`, `tokens`, the four token columns, `running_s`, `uncounted`,
+`parent_overhead_tokens` (the attempt's tokens minus its stages', per model; null without a
+per-model breakdown), `parent_overhead_estimated_cost_usd` (the attempt's cost minus its stages'
+estimates).
 
 **`/tasks/{id}/stages` rows**: `label`, `stage`, `phase`, `status` (as the workflow reports it;
 `interrupted` when still marked running while the task is not), `stage_agent`, `model`,
 `started_count`, `cached`, `started_at`, `finished_at`, `duration_s`, `stage_tokens`,
-`tool_calls`, `last_tool`.
+`tool_calls`, `last_tool`, `billed_input_tokens`, `billed_output_tokens`,
+`billed_cache_read_tokens`, `billed_cache_write_tokens`, `turns` (null: not measured),
+`estimated_cost_usd`, `cost_basis` (`exact`, `allocated` or null).
 
 **`/agents` rows**: `id`, `role`, `model`, `status` (`busy`/`idle` now: running a task or a
 stage), `running_tasks` (now), `tasks_total` (tasks submitted to the agent, created in the
@@ -124,6 +133,10 @@ the `data` fields kept outside admin scope:
 **Content**: `/agents/{id}/prompt` `{"id", "model", "effort", "tools", "disallowed_tools",
 "system_prompt"}`; `/tasks/{id}/prompts` `{"task", "description", "input_context", "args",
 "workflow_script", "agents": [{"n", "definitions"}], "stages": [{"label", "prompt_preview",
-"prompt"}]}`; `/stages/{label}/result` `{"label", "result_preview", "result"}`;
+"prompt"}]}`; `/stages/{label}/result` `{"label", "result_preview", "result", "files_changed"}`
+(`files_changed`: `[{"status", "path"}]` from the server's `git diff --name-status --no-renames`
+between the worktree head recorded at the previous completed step and at this one: steps
+completing together or in parallel share it, a merge or rebase lists everything the head moved
+by; `[]` when the head did not move; null when not knowable, e.g. the first completed step);
 `/stages/{label}/transcript` `{"entries", "next_cursor", "done"}`; `/tasks/{id}/summary`
 `{"task", "summary", "generated_at", "basis_at", "cached", "cost_usd", "tokens"}`.

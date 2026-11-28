@@ -10,6 +10,7 @@ import aiosqlite
 from src.engine_lifecycle import served_step_status
 from src.engine_read import iso_or_none
 from src.reports.entities import NotFound, page
+from src.reports.stage_costs import StageCost, task_costs
 from src.stages import normalize_stage
 
 _ATTEMPT = re.compile(r"^(?P<base>.*)@a(?P<n>\d+)$")
@@ -22,7 +23,9 @@ async def _steps(db: aiosqlite.Connection, task_id: str) -> tuple[str, list[aios
         raise NotFound(f"task {task_id} not found")
     async with db.execute(
         "SELECT label, phase, status, started_count, cached, started_at, finished_at, "
-        "agent_type, model, stage_tokens, tool_calls, last_tool, duration_s, last_progress_at "
+        "agent_type, model, stage_tokens, tool_calls, last_tool, duration_s, last_progress_at, "
+        "billed_input_tokens, billed_output_tokens, billed_cache_read_tokens, "
+        "billed_cache_write_tokens, turns "
         "FROM steps WHERE task_id = ? ORDER BY started_at, rowid",
         (task_id,),
     ) as cur:
@@ -30,9 +33,14 @@ async def _steps(db: aiosqlite.Connection, task_id: str) -> tuple[str, list[aios
 
 
 async def stages(
-    db: aiosqlite.Connection, task_id: str, params: Mapping[str, str]
+    db: aiosqlite.Connection,
+    task_id: str,
+    params: Mapping[str, str],
+    cost_ratios: Mapping[str, Mapping[str, float]],
 ) -> dict[str, Any]:
     task_status, found = await _steps(db, task_id)
+    costs = (await task_costs(db, [task_id], cost_ratios)).stages
+    unknown = StageCost(None, None)
     rows = [
         {
             "i": i, "label": r["label"], "stage": normalize_stage(r["label"]), "phase": r["phase"],
@@ -43,6 +51,12 @@ async def stages(
             "finished_at": iso_or_none(r["finished_at"]), "duration_s": r["duration_s"],
             "stage_tokens": r["stage_tokens"], "tool_calls": r["tool_calls"],
             "last_tool": r["last_tool"],
+            "billed_input_tokens": r["billed_input_tokens"],
+            "billed_output_tokens": r["billed_output_tokens"],
+            "billed_cache_read_tokens": r["billed_cache_read_tokens"],
+            "billed_cache_write_tokens": r["billed_cache_write_tokens"], "turns": r["turns"],
+            "estimated_cost_usd": costs.get((task_id, r["label"]), unknown).estimated_cost_usd,
+            "cost_basis": costs.get((task_id, r["label"]), unknown).cost_basis,
         }
         for i, r in enumerate(found)
     ]  # fmt: skip

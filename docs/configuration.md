@@ -41,6 +41,7 @@ after a change.
 | `DIOXIDE_MAX_RESUMES` | `3` | Resumes per task, across its whole life. |
 | `DIOXIDE_RATE_LIMIT_DEFAULT_WAIT_S` | `900` | Wait when a rate limit gives no reset time. |
 | `DIOXIDE_RATE_LIMIT_MAX_WAIT_S` | `86400` | Total rate-limit wait per task. |
+| `DIOXIDE_COST_RATIOS` | `{}` | Per-model token-class weights for the per-stage cost estimate, keyed by model id prefix (longest wins): `input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h`, `parent_cache_write`, each > 0, relative to base input. Unset keys use the defaults (1, 5, 0.1, 1.25, 2, 2). Opus 5.5 list prices: `{"claude-opus-5-5":{"cache_read":0.05}}`. See **Stage cost** in [Reporting API](reporting-api.md). |
 | `DIOXIDE_MODEL_FALLBACK` | `{}` (off) | Agent models to swap once when a task hits a rate limit, e.g. `{"fable":"opus"}`; see [Model fallback](#model-fallback). |
 | `DIOXIDE_CALL_MISMATCH_RETRIES` | `2` | Corrective resumes when the parent miscalls the workflow. |
 | `DIOXIDE_REVIEW_ROUNDS` / `DIOXIDE_QA_ROUNDS` | `3` / `3` | Fix rounds before asking a human. |

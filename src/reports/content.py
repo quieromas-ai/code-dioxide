@@ -196,7 +196,18 @@ async def stage_result(
     found = await asyncio.to_thread(read)
     if found is None:
         raise NotFound(f"stage {label} of task {task_id} not found")
-    return found
+    return {**found, "files_changed": await _files_changed(db, task_id, label)}
+
+
+async def _files_changed(db: aiosqlite.Connection, task_id: str, label: str) -> Any:
+    """The step's ``git diff --name-status`` since the previous completed step, measured by the
+    server (never the stage's own claim); None when not knowable or not measured."""
+    async with db.execute(
+        "SELECT files_changed_json FROM steps WHERE task_id = ? AND label = ?", (task_id, label)
+    ) as cur:
+        row = await cur.fetchone()
+    raw = row["files_changed_json"] if row is not None else None
+    return json.loads(raw) if raw else None
 
 
 async def stage_transcript(

@@ -42,6 +42,7 @@ a few days and `bucket=day` beyond; more than 5000 rows is refused.
 | Where time goes | `/metrics/time?group_by=agent` | `queued_s`, `running_s`, `human_wait_s`, `rate_limit_wait_s`, `backoff_wait_s` (stacked bar) |
 | Typical task duration | `/metrics/time?stat=p50` and `stat=p90` | `running_s` per agent |
 | Heaviest stages | `/metrics/stages?group_by=stage` | `stage_tokens`, `duration_s`, `tool_calls`, `runs` (table) |
+| Stage spend | `/metrics/stages?group_by=stage` | `estimated_cost_usd` (with `cost_basis`), `billed_output_tokens`, `turns` |
 | Work saved | `/metrics/savings?bucket=day` | `cached_stages`, `deduplicated_submissions`, `est_stage_tokens_saved` |
 | What runs now | `/activity` | table: `task`, `agent`, `stage`, `last_tool`, `cost_usd`, `waiting_on`, `since` |
 | Recent failures | `/events?type=attempt_finished,auth_failed,permission_denied,stall,timeout` | table: `at`, `task`, `type`, `data` |
@@ -62,7 +63,10 @@ Use a dashboard variable for `agent`, `project` or `task` and add it as a query 
   models, not `attempts`.
 - **`group_by=status`** (and the `status` filter) use the task's current status, so past
   buckets move when a task finishes. Use `/metrics/reliability` outcomes for history.
-- **`stage_tokens` is context size, not billing.** Never add it to usage `tokens` or price it.
+- **`stage_tokens` is context size, not billing.** Never add it to usage `tokens` or price it;
+  the billed per-stage numbers are `billed_*_tokens`.
+- **`estimated_cost_usd` is an estimate** (`cost_basis` `allocated`): only per-attempt cost is
+  exact. Do not sum it with `/metrics/usage` `cost_usd`.
 - **`partial: true`** rows include a running attempt's interim figures and change until it
   ends.
 - **Reliability identity:** per bucket `attempts` = first attempts + `resumes` +

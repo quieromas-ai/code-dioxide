@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.database import SCHEMA_VERSION, close_db, get_db, init_db, write_tx
+from src.database import SCHEMA_VERSION, STEP_USAGE_COLUMNS, close_db, get_db, init_db, write_tx
 from src.tasks import Task
 
 EXPECTED_TABLES = {
@@ -110,7 +110,7 @@ async def test_write_tx_cancellation_leaves_connection_usable(db_path: Path, tic
 async def test_user_version_set_on_new_db(db_path: Path) -> None:
     async with get_db().execute("PRAGMA user_version") as cur:
         row = await cur.fetchone()
-    assert row is not None and row[0] == SCHEMA_VERSION == 10
+    assert row is not None and row[0] == SCHEMA_VERSION == 11
     await init_db(db_path)  # an existing current-version DB opens fine
 
 
@@ -181,11 +181,11 @@ async def test_fresh_database_created_at_current_version(tmp_path: Path) -> None
         await close_db()
 
 
-async def test_version_11_database_rejected(tmp_path: Path) -> None:
-    path = tmp_path / "v11.db"
+async def test_version_12_database_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "v12.db"
     with sqlite3.connect(path) as conn:
-        conn.execute("PRAGMA user_version = 11")
-    with pytest.raises(RuntimeError, match="schema version 11 is newer"):
+        conn.execute("PRAGMA user_version = 12")
+    with pytest.raises(RuntimeError, match="schema version 12 is newer"):
         await init_db(path)
 
 
@@ -306,6 +306,38 @@ async def test_v9_database_migrates_to_v10(tmp_path: Path) -> None:
         with pytest.raises(sqlite3.IntegrityError):
             await get_db().execute("UPDATE tasks SET resume_cause = 'bogus' WHERE id = 't1'")
         await get_db().execute("UPDATE tasks SET resume_cause = 'answer' WHERE id = 't1'")
+    finally:
+        await close_db()
+    fresh = tmp_path / "fresh.db"
+    await init_db(fresh)
+    await close_db()
+    assert await _schema(path) == await _schema(fresh)
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0), reason="the fixture drops a column (SQLite 3.35+)"
+)
+async def test_v10_database_migrates_to_v11(tmp_path: Path) -> None:
+    """v11 adds the steps billed-usage and files-changed columns (NULL on existing rows: not
+    measured) and step_models."""
+    path = tmp_path / "v10.db"
+    await init_db(path)
+    await close_db()
+    with sqlite3.connect(path) as conn:
+        for column, _decl in STEP_USAGE_COLUMNS:
+            conn.execute(f"ALTER TABLE steps DROP COLUMN {column}")
+        conn.execute("DROP TABLE step_models")
+        conn.execute(
+            "INSERT INTO steps (task_id, label, status) VALUES ('t1', 'plan', 'completed')"
+        )
+        conn.execute("PRAGMA user_version = 10")
+    await init_db(path)
+    try:
+        async with get_db().execute("SELECT turns, files_changed_json FROM steps") as cur:
+            row = await cur.fetchone()
+        assert row is not None and tuple(row) == (None, None)
+        async with get_db().execute("SELECT count(*) FROM step_models") as cur:
+            assert (await cur.fetchone())[0] == 0  # type: ignore[index]
     finally:
         await close_db()
     fresh = tmp_path / "fresh.db"

@@ -1,4 +1,5 @@
 import fcntl
+import math
 import os
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
@@ -13,6 +14,7 @@ from pydantic_settings import (
 )
 
 from src.cf_access import CfAccessPolicy
+from src.stage_cost import RATIO_KEYS
 
 ENV_PREFIX = "DIOXIDE_"
 DEFAULT_HOME = Path("~/.code-dioxide")
@@ -152,6 +154,9 @@ class Settings(BaseSettings):
     # User policy for a rate-limited task: agent models to swap, e.g. {"fable": "opus"} (JSON in
     # the env). Applied once per task to the agents file of every later attempt; {} is off.
     model_fallback: dict[str, str] = Field(default_factory=dict)
+    # Per-model token-class weights for the per-stage cost estimate (src/stage_cost.py), keyed by
+    # a model id prefix, e.g. {"claude-opus-5-5": {"cache_read": 0.05}}; unset keys: defaults.
+    cost_ratios: dict[str, dict[str, float]] = Field(default_factory=dict)
     run_retention_days: NonNegInt = 90
     review_rounds: PositiveInt = 3
     qa_rounds: PositiveInt = 3
@@ -240,6 +245,24 @@ class Settings(BaseSettings):
                     "model_fallback must map non-empty model names to non-empty model names "
                     f"(got {model!r}: {replacement!r})"
                 )
+        return value
+
+    @field_validator("cost_ratios", mode="after")
+    @classmethod
+    def _known_cost_ratios(cls, value: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+        for model, ratios in value.items():
+            if not model.strip():
+                raise ValueError("cost_ratios keys must be non-empty model names or prefixes")
+            for key, ratio in ratios.items():
+                if key not in RATIO_KEYS:
+                    raise ValueError(
+                        f"cost_ratios[{model!r}] has unknown key {key!r}: one of "
+                        f"{', '.join(RATIO_KEYS)}"
+                    )
+                if not (math.isfinite(ratio) and ratio > 0):
+                    raise ValueError(
+                        f"cost_ratios[{model!r}][{key!r}] must be a finite number > 0 (got {ratio})"
+                    )
         return value
 
     @field_validator("merge_strategy", mode="before")

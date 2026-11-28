@@ -21,6 +21,12 @@ All notable changes to code-dioxide. The format follows
 - Gate classification `unclear`: the human is asked again at the same gate. A task keeps the
   workflow copied at its first launch, so tasks paused across the upgrade are unaffected.
 - A start-up log line when `DIOXIDE_SCRIPT_MODEL` is unset.
+- Per-stage billed usage (`billed_*_tokens`, `turns`) parsed server-side from stage transcripts,
+  and `estimated_cost_usd` / `cost_basis` (the attempt's per-model cost split by token-class
+  weights, `DIOXIDE_COST_RATIOS`) on `/tasks/{id}/stages` and `/metrics/stages`;
+  `parent_overhead_tokens` / `parent_overhead_estimated_cost_usd` on `/tasks/{id}/attempts`.
+- `files_changed` on `/tasks/{id}/stages/{label}/result`: the server's `git diff --name-status`
+  since the previous completed step. Schema v11 (`step_models`, new `steps` columns).
 - `/metrics/reliability`: `resumes` split by cause (`answer_resumes`, `transient_resumes`,
   `corrective_resumes`, `stage_failed_resumes`, `rate_limit_resumes`, `unattributed_resumes`;
   they sum to `resumes`). Event `attempt_started` gains `cause`; `/tasks/{id}` gains

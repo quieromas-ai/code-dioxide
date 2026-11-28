@@ -387,6 +387,77 @@ def step_times(transcript: Path) -> tuple[float | None, float | None]:
     return _record_time(first), _record_time(last)
 
 
+@dataclass(frozen=True)
+class StageModelUsage:
+    """Billed tokens one stage agent spent on one model, from its transcript."""
+
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_5m_tokens: int
+    cache_write_1h_tokens: int
+    turns: int
+
+
+def _count(usage: dict[str, Any], key: str) -> int:
+    value = usage.get(key)
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _turn_usage(usage: dict[str, Any]) -> tuple[int, int, int, int, int]:
+    """(input, output, cache read, cache write 5m, cache write 1h) of one API turn; without the
+    ``cache_creation`` split every cache write counts as 5-minute."""
+    written = _count(usage, "cache_creation_input_tokens")
+    split = usage.get("cache_creation")
+    if isinstance(split, dict):
+        five, hour = (
+            _count(split, "ephemeral_5m_input_tokens"),
+            _count(split, "ephemeral_1h_input_tokens"),
+        )
+    else:
+        five, hour = written, 0
+    return (
+        _count(usage, "input_tokens"), _count(usage, "output_tokens"),
+        _count(usage, "cache_read_input_tokens"), five, hour,
+    )  # fmt: skip
+
+
+def step_usage(transcript: Path, agent_id: str | None = None) -> dict[str, StageModelUsage] | None:
+    """Billed usage per ``message.model`` of a stage transcript: each assistant turn once (the
+    transcript repeats a turn per content block, with the same ``message.id``; the last record
+    wins), turns = distinct ids. None when the transcript is unreadable, or belongs to another
+    agent than ``agent_id`` (a label-keyed run-store copy can still hold a restarted step's
+    previous agent); unparseable lines are skipped."""
+    turns: dict[str, tuple[str, tuple[int, int, int, int, int]]] = {}
+    try:
+        with transcript.open("rb") as handle:
+            for line in handle:
+                if b'"assistant"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                message = record.get("message") if isinstance(record, dict) else None
+                if record.get("type") != "assistant" or not isinstance(message, dict):
+                    continue
+                owner = record.get("agentId")
+                if agent_id is not None and isinstance(owner, str) and owner != agent_id:
+                    return None
+                msg_id, model, usage = message.get("id"), message.get("model"), message.get("usage")
+                if isinstance(msg_id, str) and isinstance(model, str) and isinstance(usage, dict):
+                    turns[msg_id] = (model, _turn_usage(usage))
+    except OSError:
+        return None
+    sums: dict[str, list[int]] = {}
+    for model, counts in turns.values():
+        total = sums.setdefault(model, [0, 0, 0, 0, 0, 0])
+        for i, value in enumerate(counts):
+            total[i] += value
+        total[5] += 1
+    return {model: StageModelUsage(*values) for model, values in sorted(sums.items())}
+
+
 def step_source(
     cwd: str,
     session_id: str | None,

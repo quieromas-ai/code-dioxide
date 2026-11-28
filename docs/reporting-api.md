@@ -121,7 +121,23 @@ its `@aN` attempt suffix and `-rN` round segments (`review-r1-dx-reviewer-correc
 resume keeps the numbers of the run that measured it; that run counts in `runs`, the replay in
 `cached_runs`.
 `stage_tokens` is the stage's context size as the workflow reports it, not billed tokens:
-never add it to `tokens` or price it. Steps mirrored before this version get their numbers from
+never add it to `tokens` or price it. Billed usage per stage (`billed_*_tokens`, `turns`) is read
+by the server from the stage's transcript when the step completes (each API turn once), and
+again at the attempt's end.
+
+**Stage cost.** `estimated_cost_usd` splits the attempt's known per-model cost (the CLI's
+`modelUsage`, as `/metrics/usage`) across the stages that used that model in that attempt and
+the parent session's own overhead; there is no price list. `cost_basis` is `exact` when one
+stage was the model's only user in the attempt (the parent used none of it), else `allocated`:
+each participant gets a share by token-class weights relative to base input (defaults: output
+5, cache read 0.1, 5-minute cache write 1.25, 1-hour write 2, the parent's cache writes 2), and
+the parent overhead takes the residual (and the share of stages of a workflow run replaced by a
+fresh start), so stage estimates plus `parent_overhead_estimated_cost_usd` equal the attempt's
+cost exactly. The per-attempt total is always exact; only the split within
+one model is an estimate. The defaults are off where a model's ratios differ (Opus 5.5 reads
+cost 0.05x input) and for long-context tiers: set `DIOXIDE_COST_RATIOS` (see
+[Configuration](configuration.md)) to match your models. Null when the attempt has no
+per-model breakdown or the stage was not measured (completed before this version). Steps mirrored before this version get their numbers from
 `repair-usage` (from the run-store copy of the run file). `/tasks/{id}/graph` returns
 `{"nodes", "edges"}` in the field names of Grafana's Node Graph panel (`id`, `title`,
 `subTitle`, `mainStat`, `secondaryStat`; edges `id`, `source`, `target`, `mainStat` = `next`,

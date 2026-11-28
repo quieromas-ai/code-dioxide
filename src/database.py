@@ -99,7 +99,34 @@ CREATE TABLE IF NOT EXISTS steps (
     last_tool TEXT,
     duration_s REAL,
     last_progress_at REAL,
+    -- billed usage from the stage transcripts (sums of step_models); NULL: not measured
+    billed_input_tokens INTEGER,
+    billed_output_tokens INTEGER,
+    billed_cache_read_tokens INTEGER,
+    billed_cache_write_tokens INTEGER,
+    turns INTEGER,
+    -- JSON [{"status", "path"}] of `git diff --name-status` since the previous completed step;
+    -- NULL: not knowable
+    files_changed_json TEXT,
     PRIMARY KEY (task_id, label)
+);
+
+-- a stage's billed usage per (agent run, model), from its transcript (src/journal.step_usage);
+-- run_id: the workflow run; attempt_n: the attempt that ran the agent (kept on a re-parse)
+CREATE TABLE IF NOT EXISTS step_models (
+    task_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    attempt_n INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_5m_tokens INTEGER NOT NULL,
+    cache_write_1h_tokens INTEGER NOT NULL,
+    turns INTEGER NOT NULL,
+    PRIMARY KEY (task_id, label, agent_id, model)
 );
 
 -- each attempt's share per model (src/model_usage.py); none when the split is not knowable
@@ -164,7 +191,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_completed_at ON tasks (completed_at);
 """
 
 # Bump on every schema change and migrate in `_check_version`.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
+STEP_USAGE_COLUMNS = (
+    ("billed_input_tokens", "INTEGER"), ("billed_output_tokens", "INTEGER"),
+    ("billed_cache_read_tokens", "INTEGER"), ("billed_cache_write_tokens", "INTEGER"),
+    ("turns", "INTEGER"), ("files_changed_json", "TEXT"),
+)  # fmt: skip
 STAGE_COLUMNS = (
     ("agent_type", "TEXT"), ("model", "TEXT"), ("stage_tokens", "INTEGER"),
     ("tool_calls", "INTEGER"), ("last_tool", "TEXT"), ("duration_s", "REAL"),
@@ -279,6 +311,9 @@ async def _check_version(conn: aiosqlite.Connection) -> None:
     # EXISTS)
     if 1 <= version < 10:  # v10: tasks.resume_cause (reliability resume causes)
         await _add_column(conn, "tasks", "resume_cause", RESUME_CAUSE_DECL)
+    if 1 <= version < 11:  # v11: steps billed usage and files changed (step_models: SCHEMA)
+        for column, decl in STEP_USAGE_COLUMNS:
+            await _add_column(conn, "steps", column, decl)
     if version < SCHEMA_VERSION:
         await conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 

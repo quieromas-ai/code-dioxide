@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
-from src import journal
+from src import journal, stage_measure
 from src.classify import Outcome, ScriptFailure, valid_return
 from src.database import get_db, write_tx
 from src.launcher import SCRIPT_NAME
@@ -319,15 +319,26 @@ async def _mirror(
     done = [s for s in steps if s.status == "completed"]
     newly_done = [s for s in done if (rows.get(s.label) or {}).get("status") != "completed"]
     git = await asyncio.to_thread(_git, task.worktree) if newly_done else (None, None)
-    times = await asyncio.to_thread(
-        _measured_times, engine.runstore, task.id, steps, rows, cwd, session, run_id, home, tdir
+    where = _RunPlace(cwd, session, run_id, home, tdir)
+    measured = await asyncio.to_thread(
+        _measured, engine.runstore, task.id, steps, rows, where, final
     )
+    changed = await asyncio.to_thread(_files_changed, task.worktree, newly_done, rows, git[1])
     async with write_tx() as db:
         for step in steps:
+            found = measured.get(step.label, Measured((None, None), None, None))
             await _upsert(
-                db, task.id, attempt.n, step, rows.get(step.label), progress, git,
-                times.get(step.label, (None, None)),
+                db, task.id, attempt.n, step, rows.get(step.label), progress, git, found.times
             )  # fmt: skip
+            if found.usage is not None and step.agent_id is not None:
+                n = await stage_measure.attempt_at(db, task.id, found.ended, attempt.n)
+                at = stage_measure.StepRun(task.id, step.label, run_id, n)
+                await stage_measure.write_usage(db, at, step.agent_id, found.usage)
+        for label, files in changed.items():
+            await db.execute(
+                "UPDATE steps SET files_changed_json = ? WHERE task_id = ? AND label = ?",
+                (None if files is None else json.dumps(files), task.id, label),
+            )
     if final or len(done) > state.get("copied", 0):
         state["copied"] = len(done)
         await asyncio.to_thread(
@@ -336,21 +347,43 @@ async def _mirror(
     await _phase_changed(engine, task.id, steps, state)
 
 
-def _measured_times(
+@dataclasses.dataclass(frozen=True)
+class Measured:
+    """A step's transcript readings: real ``times`` (``(None, None)`` when already final),
+    billed ``usage`` once completed, and the transcript's last record time (``ended``), which
+    places the agent run in an attempt."""
+
+    times: tuple[float | None, float | None]
+    usage: dict[str, journal.StageModelUsage] | None
+    ended: float | None
+
+
+@dataclasses.dataclass(frozen=True)
+class _RunPlace:
+    """Where a workflow run's transcripts are (``journal.step_source``)."""
+
+    cwd: str
+    session: str
+    run_id: str
+    home: Path
+    tdir: Path | None
+
+
+def _measured(
     runstore: "RunStore",
     task_id: str,
     steps: list[journal.JournalStep],
     rows: dict[str, dict[str, Any]],
-    cwd: str,
-    session: str,
-    run_id: str,
-    home: Path,
-    tdir: Path | None,
-) -> dict[str, tuple[float | None, float | None]]:
-    """Real ``(start, end)`` per step from its transcript (see ``journal.step_source``). A step
-    already mirrored as completed by the same agent keeps its times: they are final, so its
-    transcript is not reopened."""
-    out: dict[str, tuple[float | None, float | None]] = {}
+    where: _RunPlace,
+    final_mirror: bool,
+) -> dict[str, Measured]:
+    """Per step, its real ``(start, end)`` and, once completed, its billed usage per model, from
+    its transcript (see ``journal.step_source``: live first, the run-store copy as fallback).
+    A step already mirrored as completed by the same agent keeps its times and usage (final: its
+    transcript is not reopened), except on the attempt's final mirror, which re-reads a
+    completed step's usage once: the journal can mark a step completed before its transcript's
+    last turn is written."""
+    out: dict[str, Measured] = {}
     for step in steps:
         row = rows.get(step.label)
         final = (
@@ -360,14 +393,37 @@ def _measured_times(
             and step.status == "completed"
             and row["agent_id"] == step.agent_id
         )
-        if step.agent_id is None or final:
+        if step.agent_id is None or (final and not final_mirror):
             continue
         source = journal.step_source(
-            cwd, session, run_id, home, step.agent_id,
-            runstore.step_copy_path(task_id, step.label), tdir,
+            where.cwd, where.session, where.run_id, where.home, step.agent_id,
+            runstore.step_copy_path(task_id, step.label), where.tdir,
         )  # fmt: skip
-        out[step.label] = journal.step_times(source)
+        read = journal.step_times(source)
+        usage = journal.step_usage(source, step.agent_id) if step.status == "completed" else None
+        out[step.label] = Measured((None, None) if final else read, usage, read[1])
     return out
+
+
+def _files_changed(
+    worktree: str | None,
+    newly_done: list[journal.JournalStep],
+    rows: dict[str, dict[str, Any]],
+    head: str | None,
+) -> dict[str, Any]:
+    """Per newly completed step, the files the worktree head moved by since the latest earlier
+    completed step with a recorded head (by ``finished_at``): a diff of heads between mirror
+    observations, not of the step's own commits (steps completing in one tick, or parallel ones,
+    share the diff); None when not knowable (the first completed step has no earlier head)."""
+    if not newly_done:
+        return {}
+    earlier = sorted(
+        (r for r in rows.values() if r["status"] == "completed" and r["git_head"]),
+        key=lambda r: r["finished_at"] or 0.0,
+    )
+    before = earlier[-1]["git_head"] if earlier else None
+    files = stage_measure.files_changed(worktree, before, head)
+    return {step.label: files for step in newly_done}
 
 
 async def _upsert(

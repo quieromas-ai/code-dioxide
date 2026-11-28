@@ -349,3 +349,16 @@ def test_report_tokens_read_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     settings = Settings(home=tmp_path, auth_token="adm")
     assert (settings.reports_token, settings.content_token) == ("rep-env-1", "con-env-1")
     assert "rep-env-1" not in repr(settings) and "con-env-1" not in repr(settings)
+
+
+def test_cost_ratios_validated(tmp_path: Path) -> None:
+    ok = Settings(home=tmp_path, cost_ratios={"claude-opus-5-5": {"cache_read": 0.05}})
+    assert ok.cost_ratios == {"claude-opus-5-5": {"cache_read": 0.05}}
+    for bad, match in (
+        ({"claude-opus": {"cache_reads": 0.05}}, "unknown key"),
+        ({"claude-opus": {"output": 0}}, "finite number > 0"),
+        ({"claude-opus": {"output": float("inf")}}, "finite number > 0"),
+        ({" ": {"output": 5}}, "non-empty"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            Settings(home=tmp_path, cost_ratios=bad)

@@ -37,6 +37,9 @@ async def test_stages_rows(reports: Env) -> None:
         "stage_agent": "dx-rev", "model": "m", "started_count": 1, "cached": False,
         "started_at": "1970-01-01T00:01:00+00:00", "finished_at": "1970-01-01T00:01:10+00:00",
         "duration_s": 1.5, "stage_tokens": 300, "tool_calls": 3, "last_tool": "Bash",
+        "billed_input_tokens": None, "billed_output_tokens": None,
+        "billed_cache_read_tokens": None, "billed_cache_write_tokens": None, "turns": None,
+        "estimated_cost_usd": None, "cost_basis": None,
     }  # fmt: skip
     assert body["rows"][2]["stage"] == "implement"
 

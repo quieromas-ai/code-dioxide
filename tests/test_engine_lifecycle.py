@@ -845,6 +845,16 @@ def _transcript(path: Path, first: str, last: str) -> None:
     path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
 
 
+def _measured_times(
+    store: RunStore, task_id: str, steps: list[JournalStep], found: dict[str, Any],
+    cwd: str, session: str, run_id: str, home: Path,
+) -> dict[str, tuple[float | None, float | None]]:  # fmt: skip
+    """The times part of ``engine_lifecycle._measured`` (a mirror tick, not the final one)."""
+    where = engine_lifecycle._RunPlace(cwd, session, run_id, home, None)
+    measured = engine_lifecycle._measured(store, task_id, steps, found, where, False)
+    return {label: m.times for label, m in measured.items()}
+
+
 async def test_upsert_prefers_measured_times(env: Env) -> None:
     task_id = await lifecycle(env)
     home, cwd, session, run_id = env.settings.claude_home, str(env.repo), "sess", "wf_run"
@@ -862,9 +872,7 @@ async def test_upsert_prefers_measured_times(env: Env) -> None:
         _transcript(live, "2026-01-02T19:40:01Z", "2026-01-02T19:40:09Z")
     store.step_copy_path(task_id, "plan").parent.mkdir(parents=True, exist_ok=True)
     store.step_copy_path(task_id, "plan").write_text("", encoding="utf-8")
-    times = engine_lifecycle._measured_times(
-        store, task_id, steps, {}, cwd, session, run_id, home, None
-    )
+    times = _measured_times(store, task_id, steps, {}, cwd, session, run_id, home)
     assert times["plan"] == (None, None)
     async with write_tx() as db:
         for step in steps:
@@ -913,7 +921,7 @@ async def test_measured_times_not_reread_for_finished_steps(
     monkeypatch.setattr(journal, "step_times", spy)
     store = env.engine.runstore
     args = (store, task_id, steps)
-    times = engine_lifecycle._measured_times(*args, {}, cwd, session, run_id, home, None)
+    times = _measured_times(*args, {}, cwd, session, run_id, home)
     assert sorted(opened) == ["agent-aimpl.jsonl", "agent-asetup.jsonl"]
     async with write_tx() as db:
         for step in steps:
@@ -925,14 +933,12 @@ async def test_measured_times_not_reread_for_finished_steps(
     }
     opened.clear()
     # The next mirror: `setup` is final in the DB (same agent); only the running step is read.
-    later = engine_lifecycle._measured_times(*args, found, cwd, session, run_id, home, None)
+    later = _measured_times(*args, found, cwd, session, run_id, home)
     assert opened == ["agent-aimpl.jsonl"] and set(later) == {"implement"}
     # A restarted step (new agent id) is measured again.
     restarted = [JournalStep("k1", "setup", "Setup", "completed", {}, 2, "anewsetup"), steps[1]]
     opened.clear()
-    engine_lifecycle._measured_times(
-        store, task_id, restarted, found, cwd, session, run_id, home, None
-    )
+    _measured_times(store, task_id, restarted, found, cwd, session, run_id, home)
     assert len(opened) == 2  # `setup` (its new agent) is read again, with `implement`
 
 

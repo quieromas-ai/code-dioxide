@@ -148,14 +148,24 @@ def build_reports_router(
         check_params(request.query_params, LIST_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
-        return redacted(engine, await entities.attempts(get_read_db(), task_id, _params(request)))
+        return redacted(
+            engine,
+            await entities.attempts(
+                get_read_db(), task_id, _params(request), engine.settings.cost_ratios
+            ),
+        )
 
     @router.get("/api/v1/tasks/{task_id}/stages", tags=["entities"], summary="a task's stages")
     async def task_stages(request: Request, task_id: str) -> Response:
         check_params(request.query_params, LIST_PARAMS)
         if (engine := provider.engine) is None:
             return unavailable()
-        return redacted(engine, await stages.stages(get_read_db(), task_id, _params(request)))
+        return redacted(
+            engine,
+            await stages.stages(
+                get_read_db(), task_id, _params(request), engine.settings.cost_ratios
+            ),
+        )
 
     @router.get(
         "/api/v1/tasks/{task_id}/graph", tags=["entities"], summary="a task's workflow graph"
@@ -257,7 +267,9 @@ def build_reports_router(
         found = filters(request, engine, windowed=True, now=now, stage_agent=True)
         group_by = parse_group_by(params.get("group_by"), metrics_stages.GROUP_BY)
         bucket = parse_bucket(params.get("bucket"))
-        rows = await metrics_stages.stage_rows(get_read_db(), found, group_by, bucket, now=now)
+        rows = await metrics_stages.stage_rows(
+            get_read_db(), found, group_by, bucket, engine.settings.cost_ratios, now=now
+        )
         return redacted(engine, metric_body(rows, found, group_by, bucket))
 
     @router.get(
