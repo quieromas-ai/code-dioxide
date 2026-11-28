@@ -9,7 +9,7 @@ unchanged.
 | Tool | Purpose |
 |---|---|
 | `delegate_task(agent, description, input_context?, priority=3, max_retries=0)` | Queue a task for an agent or a role alias; returns at once. |
-| `check_task_status(task_id)` | Status, output, current stage, steps, resumes, question, cost, recovery state. |
+| `check_task_status(task_id)` | Status, output, current stage, steps, resumes, question, cost, recovery state, attempts per launch mode. |
 | `prompt_agent(agent, message, context?, wait=true)` | Ad-hoc single task, never deduplicated; `wait` blocks up to 300 s. |
 | `get_agents(role?, status?)` | Configured agents, filtered by role or `idle`/`busy`. |
 | `get_active_agents()` | Agents running a task, and the queue depth. |

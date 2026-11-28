@@ -57,6 +57,10 @@ RETURN_KEYS: dict[str, frozenset[str]] = {
             "recovery.call_retries",
             "recovery.stage_retries",
             "recovery.rate_limit_waited_s",
+            "attempts_by_mode",
+            "attempts_by_mode.first",
+            "attempts_by_mode.resume",
+            "attempts_by_mode.fresh",
         }
     ),
     "prompt_agent": frozenset(
